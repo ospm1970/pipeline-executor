@@ -1,4 +1,5 @@
-import sqlite3 from 'sqlite3';
+import initSqlJs from 'sql.js';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -6,68 +7,104 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, 'pipeline.db');
 
 let db = null;
+let SQL = null;
 
 export async function initializeDatabase() {
-  return new Promise((resolve, reject) => {
-    db = new sqlite3.Database(DB_PATH, (err) => {
-      if (err) {
-        console.error('❌ Database connection error:', err);
-        reject(err);
-      } else {
-        console.log('✅ Database initialized');
-        resolve();
-      }
-    });
-  });
+  try {
+    SQL = await initSqlJs();
+    
+    // Carregar banco de dados existente ou criar novo
+    let data = null;
+    if (fs.existsSync(DB_PATH)) {
+      data = fs.readFileSync(DB_PATH);
+    }
+    
+    db = new SQL.Database(data);
+    console.log('✅ Database initialized');
+    
+    // Salvar banco de dados
+    saveDatabase();
+    return db;
+  } catch (err) {
+    console.error('❌ Database connection error:', err);
+    throw err;
+  }
+}
+
+function saveDatabase() {
+  try {
+    if (db) {
+      const data = db.export();
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(DB_PATH, buffer);
+    }
+  } catch (err) {
+    console.error('❌ Error saving database:', err);
+  }
 }
 
 export async function queryDatabase(sql) {
-  return new Promise((resolve, reject) => {
+  try {
     if (!db) {
-      reject(new Error('Database not initialized'));
-      return;
+      throw new Error('Database not initialized');
     }
-
-    db.all(sql, [], (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows || []);
-      }
-    });
-  });
+    
+    const stmt = db.prepare(sql);
+    const rows = [];
+    
+    while (stmt.step()) {
+      rows.push(stmt.getAsObject());
+    }
+    stmt.free();
+    
+    saveDatabase();
+    return rows || [];
+  } catch (err) {
+    console.error('❌ Query error:', err);
+    throw err;
+  }
 }
 
 export async function getAllTables() {
-  return new Promise((resolve, reject) => {
+  try {
     if (!db) {
-      reject(new Error('Database not initialized'));
-      return;
+      throw new Error('Database not initialized');
     }
-
-    db.all("SELECT name FROM sqlite_master WHERE type='table'", [], (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows.map(r => r.name));
-      }
-    });
-  });
+    
+    const sql = "SELECT name FROM sqlite_master WHERE type='table'";
+    const stmt = db.prepare(sql);
+    const rows = [];
+    
+    while (stmt.step()) {
+      rows.push(stmt.getAsObject());
+    }
+    stmt.free();
+    
+    return rows.map(r => r.name);
+  } catch (err) {
+    console.error('❌ Error getting tables:', err);
+    throw err;
+  }
 }
 
 export async function getTableSchema(tableName) {
-  return new Promise((resolve, reject) => {
+  try {
     if (!db) {
-      reject(new Error('Database not initialized'));
-      return;
+      throw new Error('Database not initialized');
     }
-
-    db.all(`PRAGMA table_info(${tableName})`, [], (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows || []);
-      }
-    });
-  });
+    
+    const sql = `PRAGMA table_info(${tableName})`;
+    const stmt = db.prepare(sql);
+    const rows = [];
+    
+    while (stmt.step()) {
+      rows.push(stmt.getAsObject());
+    }
+    stmt.free();
+    
+    return rows || [];
+  } catch (err) {
+    console.error('❌ Error getting schema:', err);
+    throw err;
+  }
 }
