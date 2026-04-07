@@ -26,9 +26,28 @@ function extractJSON(content) {
     cleaned = cleaned.trim();
     
     // Try to extract JSON object if wrapped in text
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    // Use greedy matching to get the largest JSON object
+    let jsonMatch = null;
+    let braceCount = 0;
+    let startIdx = -1;
+    
+    for (let i = 0; i < cleaned.length; i++) {
+      if (cleaned[i] === '{' && startIdx === -1) {
+        startIdx = i;
+        braceCount = 1;
+      } else if (cleaned[i] === '{' && startIdx !== -1) {
+        braceCount++;
+      } else if (cleaned[i] === '}' && startIdx !== -1) {
+        braceCount--;
+        if (braceCount === 0) {
+          jsonMatch = cleaned.substring(startIdx, i + 1);
+          break;
+        }
+      }
+    }
+    
     if (jsonMatch) {
-      cleaned = jsonMatch[0];
+      cleaned = jsonMatch;
     }
     
     // Fix common JSON issues
@@ -36,24 +55,21 @@ function extractJSON(content) {
       // Remove any trailing commas before closing braces/brackets
       cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
       
-      // Fix line breaks in strings (escape them properly) - BEFORE replacing newlines
-      // This prevents breaking up multi-line strings
+      // Fix line breaks in strings (escape them properly)
       cleaned = cleaned.replace(/([^\\])\n/g, '$1\\n');
       cleaned = cleaned.replace(/^\n/g, '\\n');
       
       return JSON.parse(cleaned);
     } catch (innerError) {
-      // Advanced JSON repair: fix unterminated strings
+      // Strategy 1: Close unterminated strings and braces
       let fixedCleaned = cleaned;
-      
-      // Strategy 1: Find and close unterminated strings
       let inString = false;
       let escaped = false;
+      let braceStack = 0;
       let result = '';
       
       for (let i = 0; i < fixedCleaned.length; i++) {
         const char = fixedCleaned[i];
-        const nextChar = fixedCleaned[i + 1];
         
         if (char === '\\' && !escaped) {
           escaped = true;
@@ -65,13 +81,24 @@ function extractJSON(content) {
           inString = !inString;
         }
         
+        if (!inString) {
+          if (char === '{') braceStack++;
+          if (char === '}') braceStack--;
+        }
+        
         result += char;
         escaped = false;
       }
       
-      // If still in string at end, close it
+      // Close unterminated string
       if (inString) {
         result += '"';
+      }
+      
+      // Close unclosed braces
+      while (braceStack > 0) {
+        result += '}';
+        braceStack--;
       }
       
       fixedCleaned = result;
@@ -79,12 +106,52 @@ function extractJSON(content) {
       try {
         return JSON.parse(fixedCleaned);
       } catch (fixError) {
-        // Strategy 2: Try removing problematic characters
-        fixedCleaned = cleaned.replace(/[\x00-\x1F]/g, ' '); // Remove control characters
+        // Strategy 2: Remove problematic characters
+        fixedCleaned = cleaned.replace(/[\x00-\x1F]/g, ' ');
         
         try {
           return JSON.parse(fixedCleaned);
         } catch (fixError2) {
+          // Strategy 3: Try to extract just the valid part
+          // Find the last complete object
+          let lastValidIdx = -1;
+          let tempBraceCount = 0;
+          let tempInString = false;
+          let tempEscaped = false;
+          
+          for (let i = 0; i < fixedCleaned.length; i++) {
+            const char = fixedCleaned[i];
+            
+            if (char === '\\' && !tempEscaped) {
+              tempEscaped = true;
+              continue;
+            }
+            
+            if (char === '"' && !tempEscaped) {
+              tempInString = !tempInString;
+            }
+            
+            if (!tempInString) {
+              if (char === '{') tempBraceCount++;
+              if (char === '}') {
+                tempBraceCount--;
+                if (tempBraceCount === 0) {
+                  lastValidIdx = i;
+                }
+              }
+            }
+            
+            tempEscaped = false;
+          }
+          
+          if (lastValidIdx > 0) {
+            try {
+              return JSON.parse(fixedCleaned.substring(0, lastValidIdx + 1));
+            } catch (fixError3) {
+              // Last resort failed
+            }
+          }
+          
           console.error('❌ JSON extraction failed:', fixError2.message);
           console.error('❌ Attempted to parse:', fixedCleaned.substring(0, 200));
           throw new Error(`Failed to parse JSON: ${e.message}`);
