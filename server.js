@@ -6,11 +6,15 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { initializeDatabase, queryDatabase, getAllTables } from './db.js';
 import { executePipeline, getPipelineExecution, getAllPipelineExecutions, generateDashboardQuery } from './orchestrator.js';
+import { RepositoryManager } from './repository-manager.js';
+import { PortManager } from './port-manager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const repositoryManager = new RepositoryManager(path.join(__dirname, 'workspaces'));
+const portManager = new PortManager(3010, 3050);
 
 // Middleware
 app.use(cors());
@@ -185,7 +189,7 @@ app.get('/api/documentation', (req, res) => {
     const docsDir = path.join(__dirname, 'docs');
     
     if (!fs.existsSync(docsDir)) {
-      return res.json({ pipelines: [] });
+      res.json({ pipelines: [] });
     }
     
     const pipelines = fs.readdirSync(docsDir)
@@ -210,6 +214,115 @@ app.get('/api/documentation', (req, res) => {
   }
 });
 
+// Execute pipeline on external repository
+app.post('/api/pipeline/external', async (req, res) => {
+  try {
+    const { repositoryUrl, requirement, githubToken } = req.body;
+    
+    if (!repositoryUrl || !requirement) {
+      return res.status(400).json({ error: 'Repository URL and requirement are required' });
+    }
+
+    const executionId = repositoryManager.generateExecutionId();
+    console.log(`🚀 Iniciando execução: ${executionId}`);
+    
+    // Clone repository
+    const repoPath = await repositoryManager.cloneRepository(repositoryUrl, executionId, githubToken);
+    const repoInfo = repositoryManager.getRepositoryInfo(repoPath);
+    
+    // Allocate port
+    const port = await portManager.allocatePort(executionId);
+    
+    // Execute pipeline
+    const pipelineExecution = await executePipeline(requirement, executionId);
+    
+    res.json({
+      executionId,
+      pipelineId: pipelineExecution.pipelineId,
+      repository: {
+        url: repositoryUrl,
+        name: repoInfo.name,
+        type: repoInfo.type,
+        version: repoInfo.version
+      },
+      deployment: {
+        port,
+        url: `http://localhost:${port}`,
+        status: 'pending'
+      },
+      status: 'started'
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get external execution status
+app.get('/api/pipeline/external/:executionId', (req, res) => {
+  try {
+    const { executionId } = req.params;
+    const port = portManager.getPort(executionId);
+    
+    if (!port) {
+      return res.status(404).json({ error: 'Execution not found' });
+    }
+    
+    res.json({
+      executionId,
+      deployment: {
+        port,
+        url: `http://localhost:${port}`,
+        status: portManager.activeProcesses.has(port) ? 'running' : 'stopped'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// List all active deployments
+app.get('/api/deployments', (req, res) => {
+  try {
+    const deployments = portManager.listAllocatedPorts();
+    res.json({
+      count: deployments.length,
+      deployments,
+      stats: portManager.getStats()
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Commit changes to external repository
+app.post('/api/pipeline/external/:executionId/commit', async (req, res) => {
+  try {
+    const { executionId } = req.params;
+    const { message } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({ error: 'Commit message is required' });
+    }
+    
+    const workspacePath = path.join(__dirname, 'workspaces', executionId);
+    const repoPath = path.join(workspacePath, 'repo');
+    
+    if (!fs.existsSync(repoPath)) {
+      return res.status(404).json({ error: 'Repository not found' });
+    }
+    
+    await repositoryManager.commitChanges(repoPath, message);
+    
+    res.json({
+      executionId,
+      message: 'Changes committed successfully',
+      commitMessage: message
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Serve frontend
 app.use(express.static('public'));
 
@@ -218,18 +331,17 @@ app.use('/docs', express.static(path.join(__dirname, 'docs')));
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`\n🚀 Manus DevAgents MVP Server`);
+  console.log(`\n🚀 Manus Pipeline Executor Server`);
   console.log(`📍 Running on http://localhost:${PORT}`);
   console.log(`🔑 OpenAI API Key: ${process.env.OPENAI_API_KEY ? '✅ Configured' : '❌ Missing'}`);
   console.log(`\nEndpoints:`);
-  console.log(`  GET  /health                    - Health check`);
-  console.log(`  GET  /api/tables                - List all tables`);
-  console.log(`  POST /api/query                 - Execute SQL query`);
-  console.log(`  POST /api/dashboard/generate    - Generate dashboard query with AI`);
-  console.log(`  POST /api/pipeline/execute      - Execute complete pipeline`);
-  console.log(`  GET  /api/pipeline              - Get all pipeline executions`);
-  console.log(`  GET  /api/pipeline/:id          - Get specific pipeline execution`);
-  console.log(`  GET  /api/documentation         - List all documentation`);
-  console.log(`  GET  /api/documentation/:id     - Get documentation for pipeline`);
-  console.log(`  GET  /api/documentation/:id/:file - Get specific documentation file\n`);
+  console.log(`  GET  /health                           - Health check`);
+  console.log(`  POST /api/pipeline/execute             - Execute pipeline on requirement`);
+  console.log(`  POST /api/pipeline/external            - Execute pipeline on external repository`);
+  console.log(`  GET  /api/pipeline/:id                 - Get pipeline execution`);
+  console.log(`  GET  /api/pipeline/external/:execId    - Get external execution status`);
+  console.log(`  POST /api/pipeline/external/:execId/commit - Commit changes to repository`);
+  console.log(`  GET  /api/deployments                  - List all active deployments`);
+  console.log(`  GET  /api/documentation                - List all documentation`);
+  console.log(`  GET  /api/documentation/:id            - Get documentation for pipeline\n`);
 });
