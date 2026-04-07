@@ -36,43 +36,60 @@ function extractJSON(content) {
       // Remove any trailing commas before closing braces/brackets
       cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
       
-      // Fix line breaks in strings (escape them properly)
-      cleaned = cleaned.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+      // Fix line breaks in strings (escape them properly) - BEFORE replacing newlines
+      // This prevents breaking up multi-line strings
+      cleaned = cleaned.replace(/([^\\])\n/g, '$1\\n');
+      cleaned = cleaned.replace(/^\n/g, '\\n');
       
       return JSON.parse(cleaned);
     } catch (innerError) {
-      // Last resort: try to fix unterminated strings
-      // Find the position of the error and try to fix it
-      const errorMatch = e.message.match(/position (\d+)/);
-      if (errorMatch) {
-        const pos = parseInt(errorMatch[1]);
-        // Try to find and fix the unterminated string
-        let fixedCleaned = cleaned;
+      // Advanced JSON repair: fix unterminated strings
+      let fixedCleaned = cleaned;
+      
+      // Strategy 1: Find and close unterminated strings
+      let inString = false;
+      let escaped = false;
+      let result = '';
+      
+      for (let i = 0; i < fixedCleaned.length; i++) {
+        const char = fixedCleaned[i];
+        const nextChar = fixedCleaned[i + 1];
         
-        // Look for strings that might be unterminated
-        const stringRegex = /"(?:[^"\\]|\\.)*(?:"|\n|$)/g;
-        let match;
-        let lastPos = 0;
-        
-        while ((match = stringRegex.exec(fixedCleaned)) !== null) {
-          if (match[0].endsWith('\n') || match[0].endsWith('$')) {
-            // This string is unterminated, add closing quote
-            fixedCleaned = fixedCleaned.substring(0, match.index + match[0].length - 1) + 
-                          '"' + 
-                          fixedCleaned.substring(match.index + match[0].length);
-            break;
-          }
+        if (char === '\\' && !escaped) {
+          escaped = true;
+          result += char;
+          continue;
         }
+        
+        if (char === '"' && !escaped) {
+          inString = !inString;
+        }
+        
+        result += char;
+        escaped = false;
+      }
+      
+      // If still in string at end, close it
+      if (inString) {
+        result += '"';
+      }
+      
+      fixedCleaned = result;
+      
+      try {
+        return JSON.parse(fixedCleaned);
+      } catch (fixError) {
+        // Strategy 2: Try removing problematic characters
+        fixedCleaned = cleaned.replace(/[\x00-\x1F]/g, ' '); // Remove control characters
         
         try {
           return JSON.parse(fixedCleaned);
-        } catch (fixError) {
-          console.error('❌ JSON extraction failed:', fixError.message);
+        } catch (fixError2) {
+          console.error('❌ JSON extraction failed:', fixError2.message);
+          console.error('❌ Attempted to parse:', fixedCleaned.substring(0, 200));
           throw new Error(`Failed to parse JSON: ${e.message}`);
         }
       }
-      
-      throw e;
     }
   }
 }
