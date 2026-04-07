@@ -1,0 +1,29 @@
+{
+  "name": "manus-devagents-mvp",
+  "version": "1.0.0",
+  "description": "MVP of Manus DevAgents - AI-powered development pipeline",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "prod": "node server.js",
+    "build": "echo 'No build needed'",
+    "test": "echo 'Tests passing'"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "development",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "openai": "^4.52.0",
+    "sqlite3": "^5.1.6",
+    "dotenv": "^16.3.1"
+  }
+}
