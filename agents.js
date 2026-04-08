@@ -25,73 +25,104 @@ function extractJSON(content) {
     
     cleaned = cleaned.trim();
     
-    // Try to extract JSON object if wrapped in text
-    // Use greedy matching to get the largest JSON object
+    // Strategy 1: Extract JSON object with balanced braces
     let jsonMatch = null;
     let braceCount = 0;
     let startIdx = -1;
+    let inString = false;
+    let escaped = false;
     
     for (let i = 0; i < cleaned.length; i++) {
-      if (cleaned[i] === '{' && startIdx === -1) {
-        startIdx = i;
-        braceCount = 1;
-      } else if (cleaned[i] === '{' && startIdx !== -1) {
-        braceCount++;
-      } else if (cleaned[i] === '}' && startIdx !== -1) {
-        braceCount--;
-        if (braceCount === 0) {
-          jsonMatch = cleaned.substring(startIdx, i + 1);
-          break;
+      const char = cleaned[i];
+      
+      // Track escape sequences
+      if (char === '\\' && !escaped) {
+        escaped = true;
+        continue;
+      }
+      
+      // Track string state
+      if (char === '"' && !escaped) {
+        inString = !inString;
+      }
+      
+      // Track braces only outside strings
+      if (!inString) {
+        if (char === '{') {
+          if (startIdx === -1) startIdx = i;
+          braceCount++;
+        } else if (char === '}') {
+          braceCount--;
+          if (braceCount === 0 && startIdx !== -1) {
+            jsonMatch = cleaned.substring(startIdx, i + 1);
+            break;
+          }
         }
       }
+      
+      escaped = false;
     }
     
     if (jsonMatch) {
       cleaned = jsonMatch;
     }
     
-    // Fix common JSON issues
+    // Strategy 2: Fix common JSON issues
     try {
-      // Remove any trailing commas before closing braces/brackets
+      // Remove trailing commas
       cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
       
-      // Fix line breaks in strings (escape them properly)
+      // Fix unescaped newlines in strings
       cleaned = cleaned.replace(/([^\\])\n/g, '$1\\n');
       cleaned = cleaned.replace(/^\n/g, '\\n');
       
+      // Remove control characters
+      cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ' ');
+      
       return JSON.parse(cleaned);
     } catch (innerError) {
-      // Strategy 1: Close unterminated strings and braces
+      // Strategy 3: Close unterminated strings and braces
       let fixedCleaned = cleaned;
-      let inString = false;
-      let escaped = false;
+      let inStr = false;
+      let esc = false;
       let braceStack = 0;
       let result = '';
+      let lastValidJSON = null;
       
       for (let i = 0; i < fixedCleaned.length; i++) {
         const char = fixedCleaned[i];
         
-        if (char === '\\' && !escaped) {
-          escaped = true;
+        if (char === '\\' && !esc) {
+          esc = true;
           result += char;
           continue;
         }
         
-        if (char === '"' && !escaped) {
-          inString = !inString;
+        if (char === '"' && !esc) {
+          inStr = !inStr;
         }
         
-        if (!inString) {
+        if (!inStr) {
           if (char === '{') braceStack++;
-          if (char === '}') braceStack--;
+          if (char === '}') {
+            braceStack--;
+            // Save potential valid JSON at each closing brace
+            if (braceStack === 0) {
+              try {
+                lastValidJSON = JSON.parse(result + char);
+              } catch (e) {
+                // Not valid yet
+              }
+            }
+          }
         }
         
         result += char;
-        escaped = false;
+        esc = false;
       }
       
       // Close unterminated string
-      if (inString) {
+      if (inStr) {
         result += '"';
       }
       
@@ -101,61 +132,52 @@ function extractJSON(content) {
         braceStack--;
       }
       
-      fixedCleaned = result;
-      
+      // Try to parse the fixed version
       try {
-        return JSON.parse(fixedCleaned);
+        return JSON.parse(result);
       } catch (fixError) {
-        // Strategy 2: Remove problematic characters
-        fixedCleaned = cleaned.replace(/[\x00-\x1F]/g, ' ');
+        // If we found a valid JSON at some point, return that
+        if (lastValidJSON) {
+          return lastValidJSON;
+        }
         
-        try {
-          return JSON.parse(fixedCleaned);
-        } catch (fixError2) {
-          // Strategy 3: Try to extract just the valid part
-          // Find the last complete object
-          let lastValidIdx = -1;
-          let tempBraceCount = 0;
-          let tempInString = false;
-          let tempEscaped = false;
-          
-          for (let i = 0; i < fixedCleaned.length; i++) {
-            const char = fixedCleaned[i];
-            
-            if (char === '\\' && !tempEscaped) {
-              tempEscaped = true;
-              continue;
-            }
-            
-            if (char === '"' && !tempEscaped) {
-              tempInString = !tempInString;
-            }
-            
-            if (!tempInString) {
-              if (char === '{') tempBraceCount++;
-              if (char === '}') {
-                tempBraceCount--;
-                if (tempBraceCount === 0) {
-                  lastValidIdx = i;
-                }
+        // Strategy 4: Extract first valid complete object
+        let attempts = [
+          // Try to find any complete JSON object
+          () => {
+            let match = result.match(/{[^{}]*}/);
+            return match ? JSON.parse(match[0]) : null;
+          },
+          // Try removing problematic characters
+          () => {
+            let cleaned = result.replace(/[^\x20-\x7E"{}\[\]:,]/g, '');
+            return JSON.parse(cleaned);
+          },
+          // Try to extract from last valid closing brace
+          () => {
+            let lastBrace = result.lastIndexOf('}');
+            if (lastBrace > 0) {
+              let firstBrace = result.indexOf('{');
+              if (firstBrace >= 0) {
+                return JSON.parse(result.substring(firstBrace, lastBrace + 1));
               }
             }
-            
-            tempEscaped = false;
+            return null;
           }
-          
-          if (lastValidIdx > 0) {
-            try {
-              return JSON.parse(fixedCleaned.substring(0, lastValidIdx + 1));
-            } catch (fixError3) {
-              // Last resort failed
-            }
+        ];
+        
+        for (let attempt of attempts) {
+          try {
+            let result = attempt();
+            if (result) return result;
+          } catch (e) {
+            // Continue to next attempt
           }
-          
-          console.error('❌ JSON extraction failed:', fixError2.message);
-          console.error('❌ Attempted to parse:', fixedCleaned.substring(0, 200));
-          throw new Error(`Failed to parse JSON: ${e.message}`);
         }
+        
+        console.error('❌ JSON extraction failed:', fixError.message);
+        console.error('❌ Attempted to parse:', result.substring(0, 300));
+        throw new Error(`Failed to parse JSON: ${fixError.message}`);
       }
     }
   }
