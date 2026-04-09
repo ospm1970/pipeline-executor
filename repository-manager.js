@@ -51,7 +51,12 @@ export class RepositoryManager {
       }
 
       console.log(`📦 Clonando repositório: ${repoUrl}`);
-      await execAsync(`git clone ${cloneUrl} ${repoPath}`);
+      
+      // Usar quotes para proteger caminhos com espaços (Windows/Linux)
+      const escapedRepoPath = process.platform === 'win32' ? `"${repoPath}"` : `'${repoPath}'`;
+      const command = `git clone "${cloneUrl}" ${escapedRepoPath}`;
+      
+      await execAsync(command, { shell: true, maxBuffer: 10 * 1024 * 1024 });
 
       console.log(`✅ Repositório clonado em: ${repoPath}`);
       return repoPath;
@@ -127,7 +132,16 @@ export class RepositoryManager {
   async commitChanges(repoPath, message) {
     try {
       console.log(`📝 Fazendo commit das alterações...`);
-      await execAsync(`cd ${repoPath} && git add . && git commit -m "${message}"`, {
+      
+      // Usar quotes para proteger caminhos com espaços
+      const escapedRepoPath = process.platform === 'win32' ? `"${repoPath}"` : `'${repoPath}'`;
+      const escapedMessage = message.replace(/"/g, '\\"');
+      const command = process.platform === 'win32' 
+        ? `cd "${repoPath}" && git add . && git commit -m "${escapedMessage}"`
+        : `cd '${repoPath}' && git add . && git commit -m "${escapedMessage}"`;
+      
+      await execAsync(command, {
+        shell: true,
         maxBuffer: 10 * 1024 * 1024,
       });
       console.log(`✅ Alterações comitadas com sucesso`);
