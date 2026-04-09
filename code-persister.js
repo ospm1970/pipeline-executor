@@ -23,8 +23,9 @@ export class CodePersister {
       }
       
       // Se o código tem um campo 'code' com o código real
+      let fileName = 'generated-code.txt';
       if (code.code) {
-        const fileName = this.generateFileName(code.language || 'js');
+        fileName = this.generateFileName(code.language || 'js');
         const filePath = path.join(srcDir, fileName);
         
         fs.writeFileSync(filePath, code.code, 'utf-8');

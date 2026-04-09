@@ -249,16 +249,20 @@ export class RepositoryManager {
         : `cd '${repoPath}' && git push origin main`;
       
       if (githubToken) {
-        // Configurar credenciais temporárias para o push
+        // Usar token de autenticacao para o push
+        const remoteUrl = `https://${githubToken}@github.com/ospm1970/pipeline-executor.git`;
         pushCommand = process.platform === 'win32'
-          ? `cd "${repoPath}" && git config credential.helper store && echo "https://${githubToken}@github.com" | git credential approve && git push origin main`
-          : `cd '${repoPath}' && git push "https://${githubToken}@github.com/$(git config --get remote.origin.url | sed 's/.*github.com\///').git" main`;
+          ? `cd "${repoPath}" && git push ${remoteUrl} main`
+          : `cd '${repoPath}' && git push ${remoteUrl} main`;
       }
       
-      await execAsync(pushCommand, {
+      const { stdout, stderr } = await execAsync(pushCommand, {
         shell: true,
         maxBuffer: 10 * 1024 * 1024,
       });
+      
+      if (stdout) console.log(`Push stdout: ${stdout}`);
+      if (stderr) console.log(`Push stderr: ${stderr}`);
       
       console.log(`✅ Push realizado com sucesso`);
       return true;
