@@ -140,10 +140,12 @@ export class RepositoryManager {
           ? `cd "${repoPath}" && git config user.email "pipeline@executor.local" && git config user.name "Pipeline Executor"`
           : `cd '${repoPath}' && git config user.email "pipeline@executor.local" && git config user.name "Pipeline Executor"`;
         
-        await execAsync(configCommand, {
-          shell: true,
-          maxBuffer: 10 * 1024 * 1024,
-        });
+      const { stdout: configStdout, stderr: configStderr } = await execAsync(configCommand, {
+        shell: true,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      if (configStdout) console.log(`Git config stdout: ${configStdout}`);
+      if (configStderr) console.log(`Git config stderr: ${configStderr}`);
       } catch (configError) {
         console.warn(`⚠️ Erro ao configurar git user: ${configError.message}`);
       }
@@ -155,13 +157,20 @@ export class RepositoryManager {
         ? `cd "${repoPath}" && git add . && git commit -m "${escapedMessage}"`
         : `cd '${repoPath}' && git add . && git commit -m "${escapedMessage}"`;
       
-      await execAsync(command, {
+      const { stdout, stderr } = await execAsync(command, {
         shell: true,
         maxBuffer: 10 * 1024 * 1024,
       });
+      if (stdout) console.log(`Commit stdout: ${stdout}`);
+      if (stderr) console.log(`Commit stderr: ${stderr}`);
       console.log(`✅ Alterações comitadas com sucesso`);
       return true;
     } catch (error) {
+      // Mostrar erro completo para debugging
+      console.error(`❌ Erro completo do git: ${error.message}`);
+      if (error.stderr) console.error(`stderr: ${error.stderr}`);
+      if (error.stdout) console.error(`stdout: ${error.stdout}`);
+      
       // Se não há mudanças, não é um erro
       if (error.message.includes('nothing to commit')) {
         console.log(`ℹ️ Nenhuma alteração para comitar`);
