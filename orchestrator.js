@@ -5,11 +5,13 @@ import { fixSQL } from './sql-fixer.js';
 import { UIUXAgentWithSkill } from './agents-ux.js';
 import { SpecAgentWithSkill } from './agents-spec.js';
 import DocumenterAgentWithSkill from './agents-documenter.js';
+import { RepositoryAnalyzer } from './repository-analyzer.js';
+import fs from 'fs';
 
 // Store pipeline executions in memory
 const pipelineExecutions = new Map();
 
-export async function executePipeline(requirement) {
+export async function executePipeline(requirement, executionId = null, repositoryPath = null) {
   const pipelineId = `pipeline-${Date.now()}`;
   const execution = {
     id: pipelineId,
@@ -29,8 +31,31 @@ export async function executePipeline(requirement) {
     console.log('\n📝 STAGE 0: SPECIFICATION');
     execution.logs.push({ timestamp: new Date(), message: 'Starting specification stage (Spec-Driven Development)...', level: 'info' });
     
+    // Analyze repository if provided
+    let repositoryAnalysis = null;
+    let requirementWithContext = requirement;
+    
+    if (repositoryPath && fs.existsSync(repositoryPath)) {
+      console.log('🔍 Analisando repositório para extrair contexto...');
+      execution.logs.push({ timestamp: new Date(), message: 'Analyzing repository structure...', level: 'info' });
+      
+      try {
+        repositoryAnalysis = await RepositoryAnalyzer.analyzeRepository(repositoryPath);
+        const analysisSummary = RepositoryAnalyzer.generateSummary(repositoryAnalysis);
+        
+        // Include repository context in the requirement
+        requirementWithContext = `${requirement}\n\n## Contexto do Repositório\n${analysisSummary}`;
+        
+        execution.logs.push({ timestamp: new Date(), message: `Repository analysis completed: ${repositoryAnalysis.endpoints.length} endpoints, ${repositoryAnalysis.functions.length} functions`, level: 'info' });
+        console.log('✅ Repository analysis completed');
+      } catch (analysisError) {
+        console.warn(`⚠️ Repository analysis failed: ${analysisError.message}`);
+        execution.logs.push({ timestamp: new Date(), message: `Repository analysis failed: ${analysisError.message}`, level: 'warning' });
+      }
+    }
+    
     const specAgent = new SpecAgentWithSkill();
-    const specification = await specAgent.generateSpecification(requirement);
+    const specification = await specAgent.generateSpecification(requirementWithContext);
     
     execution.stages.specification = {
       status: 'completed',
