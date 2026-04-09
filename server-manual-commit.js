@@ -110,7 +110,7 @@ app.get('/api/pipeline', (req, res) => {
 // Execute pipeline on external repository
 app.post('/api/pipeline/external', async (req, res) => {
   try {
-    const { repositoryUrl, requirement, githubToken, autoCommit = true } = req.body;
+    const { repositoryUrl, requirement, githubToken } = req.body;
     
     if (!repositoryUrl || !requirement) {
       return res.status(400).json({ error: 'Repository URL and requirement are required' });
@@ -129,26 +129,6 @@ app.post('/api/pipeline/external', async (req, res) => {
     // Execute pipeline
     const pipelineExecution = await executePipeline(requirement, executionId);
     
-    // Auto-commit and push if enabled
-    if (autoCommit) {
-      try {
-        console.log(`📝 Auto-committing changes for ${executionId}...`);
-        const commitMessage = `feat: ${requirement.substring(0, 50)}...`;
-        await repositoryManager.commitChanges(repoPath, commitMessage);
-        console.log(`✅ Changes committed`);
-        
-        // Auto-push if token is provided
-        if (githubToken) {
-          console.log(`📤 Auto-pushing changes for ${executionId}...`);
-          await repositoryManager.pushChanges(repoPath, githubToken);
-          console.log(`✅ Changes pushed to GitHub`);
-        }
-      } catch (commitError) {
-        console.error(`⚠️ Auto-commit/push failed: ${commitError.message}`);
-        // Don't fail the pipeline if commit fails
-      }
-    }
-    
     res.json({
       executionId,
       pipelineId: pipelineExecution.pipelineId,
@@ -163,12 +143,7 @@ app.post('/api/pipeline/external', async (req, res) => {
         url: `http://localhost:${port}`,
         status: 'pending'
       },
-      autoCommit: {
-        enabled: autoCommit,
-        committed: autoCommit,
-        pushed: autoCommit && !!githubToken
-      },
-      status: 'completed'
+      status: 'started'
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -295,7 +270,7 @@ app.listen(PORT, () => {
   console.log(`\nEndpoints:`);
   console.log(`  GET  /health                           - Health check`);
   console.log(`  POST /api/pipeline/execute             - Execute pipeline on requirement`);
-  console.log(`  POST /api/pipeline/external            - Execute pipeline on external repository (with auto-commit)`);
+  console.log(`  POST /api/pipeline/external            - Execute pipeline on external repository`);
   console.log(`  GET  /api/pipeline/:id                 - Get pipeline execution`);
   console.log(`  GET  /api/pipeline/external/:execId    - Get external execution status`);
   console.log(`  POST /api/pipeline/external/:execId/commit - Commit changes to repository`);
