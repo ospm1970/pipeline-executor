@@ -4,31 +4,79 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { initializeDatabase, queryDatabase, getAllTables } from './db.js';
+import { executePipeline, getPipelineExecution, getAllPipelineExecutions, generateDashboardQuery } from './orchestrator.js';
 import { RepositoryManager } from './repository-manager.js';
 import { PortManager } from './port-manager.js';
-import { executePipeline } from './orchestrator.js';
-import dashboardMonitor from './dashboard-monitor.js';
+import dashboardRouter from './dashboard-monitor.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const repositoryManager = new RepositoryManager('./workspaces');
-const portManager = new PortManager();
-const dashboardRouter = dashboardMonitor(repositoryManager);
+const repositoryManager = new RepositoryManager(path.join(__dirname, 'workspaces'));
+const portManager = new PortManager(3010, 3050);
 
 // Middleware
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json());
+
+// Initialize database
+await initializeDatabase();
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', timestamp: new Date() });
 });
 
-// Execute pipeline on requirement
+// Get all tables
+app.get('/api/tables', async (req, res) => {
+  try {
+    const tables = await getAllTables();
+    res.json({ tables });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Execute SQL query
+app.post('/api/query', async (req, res) => {
+  try {
+    const { sql } = req.body;
+    
+    if (!sql) {
+      return res.status(400).json({ error: 'SQL query is required' });
+    }
+
+    const result = await queryDatabase(sql);
+    res.json({ 
+      query: sql,
+      data: result,
+      rowCount: result.length,
+      timestamp: new Date()
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Generate dashboard query using AI
+app.post('/api/dashboard/generate', async (req, res) => {
+  try {
+    const { requirement } = req.body;
+    
+    if (!requirement) {
+      return res.status(400).json({ error: 'Requirement is required' });
+    }
+
+    const result = await generateDashboardQuery(requirement);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Execute complete pipeline
 app.post('/api/pipeline/execute', async (req, res) => {
   try {
     const { requirement } = req.body;
@@ -37,16 +85,10 @@ app.post('/api/pipeline/execute', async (req, res) => {
       return res.status(400).json({ error: 'Requirement is required' });
     }
 
-    const pipelineExecution = await executePipeline(requirement);
-    
-    res.json({
-      pipelineId: pipelineExecution.id,
-      status: pipelineExecution.status,
-      requirement,
-      createdAt: pipelineExecution.createdAt
-    });
+    // Start pipeline in background
+    const execution = await executePipeline(requirement);
+    res.json(execution);
   } catch (error) {
-    console.error('Pipeline execution error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -55,42 +97,107 @@ app.post('/api/pipeline/execute', async (req, res) => {
 app.get('/api/pipeline/:pipelineId', (req, res) => {
   try {
     const { pipelineId } = req.params;
-    const docsPath = path.join(__dirname, 'docs', pipelineId);
+    const execution = getPipelineExecution(pipelineId);
     
-    if (!fs.existsSync(docsPath)) {
+    if (!execution) {
       return res.status(404).json({ error: 'Pipeline not found' });
     }
-    
-    const files = fs.readdirSync(docsPath);
-    const documentation = files.map(file => ({
-      filename: file,
-      path: `/docs/${pipelineId}/${file}`
-    }));
-    
-    res.json({
-      pipelineId,
-      documentation,
-      status: 'completed'
+
+    res.json(execution);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all pipeline executions
+app.get('/api/pipeline', (req, res) => {
+  try {
+    const executions = getAllPipelineExecutions();
+    res.json({ 
+      count: executions.length,
+      executions: executions.sort((a, b) => b.createdAt - a.createdAt)
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// List all pipelines
-app.get('/api/pipeline', (req, res) => {
+// Get documentation for a pipeline
+app.get('/api/documentation/:pipelineId', (req, res) => {
   try {
-    const docsPath = path.join(__dirname, 'docs');
+    const { pipelineId } = req.params;
+    const docsDir = path.join(__dirname, 'docs', pipelineId);
     
-    if (!fs.existsSync(docsPath)) {
-      return res.json({ count: 0, pipelines: [] });
+    if (!fs.existsSync(docsDir)) {
+      return res.status(404).json({ error: 'Documentation not found' });
     }
     
-    const pipelines = fs.readdirSync(docsPath)
-      .filter(file => fs.statSync(path.join(docsPath, file)).isDirectory())
+    const files = fs.readdirSync(docsDir).filter(f => f.endsWith('.md'));
+    const docs = {};
+    
+    files.forEach(file => {
+      const filePath = path.join(docsDir, file);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      docs[file] = { content, size: fs.statSync(filePath).size };
+    });
+    
+    res.json({ pipelineId, documentationFiles: files, documentation: docs });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get specific documentation file
+app.get('/api/documentation/:pipelineId/:filename', (req, res) => {
+  try {
+    const { pipelineId, filename } = req.params;
+    const filePath = path.join(__dirname, 'docs', pipelineId, filename);
+    
+    if (!fs.existsSync(filePath) || !filename.endsWith('.md')) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    const content = fs.readFileSync(filePath, 'utf-8');
+    res.json({ pipelineId, filename, content });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Download documentation as ZIP
+app.get('/api/documentation/:pipelineId/download/zip', (req, res) => {
+  try {
+    const { pipelineId } = req.params;
+    const docsDir = path.join(__dirname, 'docs', pipelineId);
+    
+    if (!fs.existsSync(docsDir)) {
+      return res.status(404).json({ error: 'Documentation not found' });
+    }
+    
+    res.json({ 
+      message: 'ZIP download feature coming soon',
+      pipelineId,
+      docsDir
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// List all documentation
+app.get('/api/documentation', (req, res) => {
+  try {
+    const docsDir = path.join(__dirname, 'docs');
+    
+    if (!fs.existsSync(docsDir)) {
+      res.json({ pipelines: [] });
+    }
+    
+    const pipelines = fs.readdirSync(docsDir)
+      .filter(f => fs.statSync(path.join(docsDir, f)).isDirectory())
       .map(pipelineId => {
-        const pipelineDir = path.join(docsPath, pipelineId);
-        const files = fs.readdirSync(pipelineDir);
+        const pipelineDir = path.join(docsDir, pipelineId);
+        const files = fs.readdirSync(pipelineDir).filter(f => f.endsWith('.md'));
         const stats = fs.statSync(pipelineDir);
         return {
           pipelineId,
@@ -192,7 +299,7 @@ app.get('/api/deployments', (req, res) => {
 app.post('/api/pipeline/external/:executionId/commit', async (req, res) => {
   try {
     const { executionId } = req.params;
-    const { message, push = false, githubToken = null } = req.body;
+    const { message } = req.body;
     
     if (!message) {
       return res.status(400).json({ error: 'Commit message is required' });
@@ -205,49 +312,12 @@ app.post('/api/pipeline/external/:executionId/commit', async (req, res) => {
       return res.status(404).json({ error: 'Repository not found' });
     }
     
-    // Fazer commit
     await repositoryManager.commitChanges(repoPath, message);
     
-    // Fazer push se solicitado
-    let pushResult = null;
-    if (push) {
-      await repositoryManager.pushChanges(repoPath, githubToken);
-      pushResult = { status: 'success', message: 'Changes pushed to repository' };
-    }
-    
     res.json({
       executionId,
-      commit: {
-        status: 'success',
-        message: 'Changes committed successfully',
-        commitMessage: message
-      },
-      push: pushResult
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Push changes to external repository
-app.post('/api/pipeline/external/:executionId/push', async (req, res) => {
-  try {
-    const { executionId } = req.params;
-    const { githubToken = null } = req.body;
-    
-    const workspacePath = path.join(__dirname, 'workspaces', executionId);
-    const repoPath = path.join(workspacePath, 'repo');
-    
-    if (!fs.existsSync(repoPath)) {
-      return res.status(404).json({ error: 'Repository not found' });
-    }
-    
-    await repositoryManager.pushChanges(repoPath, githubToken);
-    
-    res.json({
-      executionId,
-      status: 'success',
-      message: 'Changes pushed to repository'
+      message: 'Changes committed successfully',
+      commitMessage: message
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -275,7 +345,6 @@ app.listen(PORT, () => {
   console.log(`  GET  /api/pipeline/:id                 - Get pipeline execution`);
   console.log(`  GET  /api/pipeline/external/:execId    - Get external execution status`);
   console.log(`  POST /api/pipeline/external/:execId/commit - Commit changes to repository`);
-  console.log(`  POST /api/pipeline/external/:execId/push   - Push changes to repository`);
   console.log(`  GET  /api/deployments                  - List all active deployments`);
   console.log(`  GET  /api/documentation                - List all documentation`);
   console.log(`  GET  /api/documentation/:id            - Get documentation for pipeline\n`);

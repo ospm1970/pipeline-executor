@@ -210,6 +210,46 @@ export class RepositoryManager {
   }
 
   /**
+   * Faz push das alterações para o repositório remoto
+   */
+  async pushChanges(repoPath, githubToken = null) {
+    try {
+      console.log(`📤 Fazendo push das alterações...`);
+      
+      // Usar quotes para proteger caminhos com espaços
+      const escapedRepoPath = process.platform === 'win32' ? `"${repoPath}"` : `'${repoPath}'`;
+      
+      // Se token foi fornecido, adicionar credenciais
+      let pushCommand = process.platform === 'win32'
+        ? `cd "${repoPath}" && git push origin main`
+        : `cd '${repoPath}' && git push origin main`;
+      
+      if (githubToken) {
+        // Configurar credenciais temporárias para o push
+        pushCommand = process.platform === 'win32'
+          ? `cd "${repoPath}" && git config credential.helper store && echo "https://${githubToken}@github.com" | git credential approve && git push origin main`
+          : `cd '${repoPath}' && git push "https://${githubToken}@github.com/$(git config --get remote.origin.url | sed 's/.*github.com\///').git" main`;
+      }
+      
+      await execAsync(pushCommand, {
+        shell: true,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      
+      console.log(`✅ Push realizado com sucesso`);
+      return true;
+    } catch (error) {
+      // Se falhar, pode ser porque não há mudanças ou permissão negada
+      if (error.message.includes('nothing to push') || error.message.includes('up to date')) {
+        console.log(`ℹ️ Nada para fazer push`);
+        return true;
+      }
+      console.error(`❌ Erro ao fazer push:`, error.message);
+      throw new Error(`Falha ao fazer push: ${error.message}`);
+    }
+  }
+
+  /**
    * Remove um workspace
    */
   removeWorkspace(executionId) {
