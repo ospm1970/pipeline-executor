@@ -16,7 +16,6 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const repositoryManager = new RepositoryManager('./workspaces');
 const portManager = new PortManager();
-const dashboardRouter = dashboardMonitor(repositoryManager);
 
 // Middleware
 app.use(cors());
@@ -255,7 +254,7 @@ app.post('/api/pipeline/external/:executionId/push', async (req, res) => {
 });
 
 // Dashboard routes
-app.use('/api/dashboard', dashboardRouter);
+app.use('/api/dashboard', dashboardMonitor);
 
 // Serve frontend
 app.use(express.static('public'));
@@ -277,6 +276,12 @@ app.listen(PORT, () => {
   console.log(`  POST /api/pipeline/external/:execId/commit - Commit changes to repository`);
   console.log(`  POST /api/pipeline/external/:execId/push   - Push changes to repository`);
   console.log(`  GET  /api/deployments                  - List all active deployments`);
-  console.log(`  GET  /api/documentation                - List all documentation`);
-  console.log(`  GET  /api/documentation/:id            - Get documentation for pipeline\n`);
+  console.log(`  GET  /api/dashboard/stats              - Dashboard statistics`);
+  console.log(`  GET  /api/dashboard/distribution       - Distribution by type`);
+  console.log(`  GET  /api/dashboard/errors             - Most common errors`);
+  console.log(`  GET  /api/dashboard/time-saved         - Time saved`);
+  console.log(`  GET  /api/dashboard/executions         - List executions`);
+  console.log(`  GET  /api/dashboard/timeline           - Timeline 24h`);
+  console.log(`  GET  /api/dashboard/performance        - Performance by stage`);
+  console.log(`  GET  /api/dashboard/health             - Dashboard health\n`);
 });
