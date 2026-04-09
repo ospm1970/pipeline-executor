@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { RepositoryManager } from './repository-manager.js';
 import { PortManager } from './port-manager.js';
 import { executePipeline } from './orchestrator.js';
+import { CodePersister } from './code-persister.js';
 import dashboardMonitor from './dashboard-monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -128,6 +129,27 @@ app.post('/api/pipeline/external', async (req, res) => {
     
     // Execute pipeline
     const pipelineExecution = await executePipeline(requirement, executionId);
+    
+    // Persist generated code and pipeline output to repository
+    try {
+      console.log('📝 Persistindo código gerado no repositório...');
+      
+      // Persistir código gerado
+      if (pipelineExecution.stages.development && pipelineExecution.stages.development.result) {
+        await CodePersister.persistCode(
+          repoPath,
+          pipelineExecution.stages.development.result,
+          requirement
+        );
+      }
+      
+      // Persistir saída completa do pipeline
+      await CodePersister.persistPipelineOutput(repoPath, pipelineExecution);
+      
+      console.log('✅ Código e saída do pipeline persistidos');
+    } catch (persistError) {
+      console.warn('⚠️ Erro ao persistir código: ' + persistError.message);
+    }
     
     // Auto-commit and push if enabled
     if (autoCommit) {
