@@ -9,6 +9,7 @@ import { PortManager } from './port-manager.js';
 import { executePipeline } from './orchestrator.js';
 import { CodePersister } from './code-persister.js';
 import { CodeIntegrator } from './code-integrator.js';
+import { RepositoryAnalyzer } from './repository-analyzer.js';
 import dashboardMonitor from './dashboard-monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -128,8 +129,18 @@ app.post('/api/pipeline/external', async (req, res) => {
     // Allocate port
     const port = await portManager.allocatePort(executionId);
     
-    // Execute pipeline
-    const pipelineExecution = await executePipeline(requirement, executionId);
+    // Analyze repository to provide context
+    console.log('🔍 Analisando repositório para extrair contexto...');
+    const repositoryAnalysis = await RepositoryAnalyzer.analyzeRepository(repoPath);
+    const analysisSummary = RepositoryAnalyzer.generateSummary(repositoryAnalysis);
+    console.log(analysisSummary);
+    
+    // Execute pipeline with repository context
+    const requirementWithContext = `${requirement}
+
+## Contexto do Repositório
+${analysisSummary}`;
+    const pipelineExecution = await executePipeline(requirementWithContext, executionId);
     
     // Integrate generated code into repository files
     try {
