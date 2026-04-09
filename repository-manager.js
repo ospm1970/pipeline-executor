@@ -1,4 +1,4 @@
-import { exec, execSync } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
@@ -48,17 +48,22 @@ export class RepositoryManager {
       let cloneUrl = repoUrl;
       if (githubToken && repoUrl.includes('github.com')) {
         cloneUrl = repoUrl.replace('https://', `https://${githubToken}@`);
+        console.log(`🔐 Usando autenticação com token para clone`);
       }
 
-      console.log(`📦 Clonando repositório: ${repoUrl}`);
-      
-      // Usar quotes para proteger caminhos com espaços (Windows/Linux)
-      const escapedRepoPath = process.platform === 'win32' ? `"${repoPath}"` : `'${repoPath}'`;
-      const command = `git clone "${cloneUrl}" ${escapedRepoPath}`;
-      
-      await execAsync(command, { shell: true, maxBuffer: 10 * 1024 * 1024 });
+      console.log(`📥 Clonando repositório: ${repoUrl}`);
 
-      console.log(`✅ Repositório clonado em: ${repoPath}`);
+      // Usar quotes para proteger caminhos com espaços
+      const cloneCommand = process.platform === 'win32'
+        ? `cd "${workspacePath}" && git clone "${cloneUrl}" repo`
+        : `cd '${workspacePath}' && git clone '${cloneUrl}' repo`;
+
+      await execAsync(cloneCommand, {
+        shell: true,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+
+      console.log(`✅ Repositório clonado com sucesso em: ${repoPath}`);
       return repoPath;
     } catch (error) {
       console.error(`❌ Erro ao clonar repositório:`, error.message);
@@ -67,75 +72,17 @@ export class RepositoryManager {
   }
 
   /**
-   * Detecta o tipo de projeto
-   */
-  detectProjectType(repoPath) {
-    const files = fs.readdirSync(repoPath);
-
-    if (files.includes('package.json')) {
-      return 'nodejs';
-    }
-    if (files.includes('requirements.txt')) {
-      return 'python';
-    }
-    if (files.includes('pom.xml')) {
-      return 'maven';
-    }
-    if (files.includes('build.gradle')) {
-      return 'gradle';
-    }
-    if (files.includes('Gemfile')) {
-      return 'ruby';
-    }
-    if (files.includes('go.mod')) {
-      return 'golang';
-    }
-
-    return 'unknown';
-  }
-
-  /**
-   * Obtém o comando de build para o tipo de projeto
-   */
-  getBuildCommand(projectType) {
-    const commands = {
-      nodejs: 'npm install',
-      python: 'pip install -r requirements.txt',
-      maven: 'mvn clean install',
-      gradle: './gradlew build',
-      ruby: 'bundle install',
-      golang: 'go build',
-    };
-
-    return commands[projectType] || null;
-  }
-
-  /**
-   * Obtém o comando de start para o tipo de projeto
-   */
-  getStartCommand(projectType, port) {
-    const commands = {
-      nodejs: `PORT=${port} npm start`,
-      python: `PORT=${port} python app.py`,
-      maven: `java -jar target/*.jar --server.port=${port}`,
-      gradle: `./gradlew bootRun --args='--server.port=${port}'`,
-      ruby: `rails server -p ${port}`,
-      golang: `./app -port ${port}`,
-    };
-
-    return commands[projectType] || null;
-  }
-
-  /**
-   * Faz commit das alterações no repositório clonado
+   * Faz commit das alterações
    */
   async commitChanges(repoPath, message) {
     try {
       console.log(`📝 Fazendo commit das alterações...`);
-      
+
+      // Escapar a mensagem de commit para evitar problemas com caracteres especiais
+      const escapedMessage = message.replace(/"/g, '\\"');
+
       // Configurar git user se não estiver configurado
       try {
-        const escapedRepoPath = process.platform === 'win32' ? `"${repoPath}"` : `'${repoPath}'`;
         const configCommand = process.platform === 'win32'
           ? `cd "${repoPath}" && git config user.email "pipeline@executor.local" && git config user.name "Pipeline Executor"`
           : `cd '${repoPath}' && git config user.email "pipeline@executor.local" && git config user.name "Pipeline Executor"`;
@@ -150,9 +97,6 @@ export class RepositoryManager {
         console.warn(`⚠️ Erro ao configurar git user: ${configError.message}`);
       }
       
-      // Usar quotes para proteger caminhos com espaços
-      const escapedRepoPath = process.platform === 'win32' ? `"${repoPath}"` : `'${repoPath}'`;
-      const escapedMessage = message.replace(/"/g, '\\"');
       const command = process.platform === 'win32' 
         ? `cd "${repoPath}" && git add . && git commit -m "${escapedMessage}"`
         : `cd '${repoPath}' && git add . && git commit -m "${escapedMessage}"`;
@@ -235,26 +179,35 @@ export class RepositoryManager {
 
   /**
    * Faz push das alterações para o repositório remoto
+   * Usa a URL remota original do repositório clonado
    */
   async pushChanges(repoPath, githubToken = null) {
     try {
       console.log(`📤 Fazendo push das alterações...`);
       
-      // Usar quotes para proteger caminhos com espaços
-      const escapedRepoPath = process.platform === 'win32' ? `"${repoPath}"` : `'${repoPath}'`;
+      // Obter a URL remota original do repositório
+      let getRemoteCommand = process.platform === 'win32'
+        ? `cd "${repoPath}" && git config --get remote.origin.url`
+        : `cd '${repoPath}' && git config --get remote.origin.url`;
       
-      // Se token foi fornecido, adicionar credenciais
-      let pushCommand = process.platform === 'win32'
-        ? `cd "${repoPath}" && git push origin main`
-        : `cd '${repoPath}' && git push origin main`;
+      const { stdout: remoteUrlOutput } = await execAsync(getRemoteCommand, {
+        shell: true,
+        maxBuffer: 10 * 1024 * 1024,
+      });
       
-      if (githubToken) {
-        // Usar token de autenticacao para o push
-        const remoteUrl = `https://${githubToken}@github.com/ospm1970/pipeline-executor.git`;
-        pushCommand = process.platform === 'win32'
-          ? `cd "${repoPath}" && git push ${remoteUrl} main`
-          : `cd '${repoPath}' && git push ${remoteUrl} main`;
+      let remoteUrl = remoteUrlOutput.trim();
+      console.log(`📍 URL remota do repositório: ${remoteUrl}`);
+      
+      // Se token foi fornecido, adicionar credenciais à URL
+      if (githubToken && remoteUrl.includes('github.com')) {
+        remoteUrl = remoteUrl.replace('https://', `https://${githubToken}@`);
+        console.log(`🔐 Usando autenticação com token`);
       }
+      
+      // Construir comando de push
+      let pushCommand = process.platform === 'win32'
+        ? `cd "${repoPath}" && git push ${remoteUrl} main`
+        : `cd '${repoPath}' && git push ${remoteUrl} main`;
       
       const { stdout, stderr } = await execAsync(pushCommand, {
         shell: true,
@@ -292,6 +245,34 @@ export class RepositoryManager {
     } catch (error) {
       console.error(`❌ Erro ao remover workspace:`, error.message);
       return false;
+    }
+  }
+
+  /**
+   * Detecta o tipo de projeto
+   */
+  detectProjectType(repoPath) {
+    try {
+      if (fs.existsSync(path.join(repoPath, 'package.json'))) {
+        return 'nodejs';
+      }
+      if (fs.existsSync(path.join(repoPath, 'requirements.txt')) || 
+          fs.existsSync(path.join(repoPath, 'setup.py'))) {
+        return 'python';
+      }
+      if (fs.existsSync(path.join(repoPath, 'pom.xml')) || 
+          fs.existsSync(path.join(repoPath, 'build.gradle'))) {
+        return 'java';
+      }
+      if (fs.existsSync(path.join(repoPath, 'go.mod'))) {
+        return 'go';
+      }
+      if (fs.existsSync(path.join(repoPath, 'Cargo.toml'))) {
+        return 'rust';
+      }
+      return 'unknown';
+    } catch (error) {
+      return 'unknown';
     }
   }
 }
