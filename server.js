@@ -1,4 +1,3 @@
-import 'dotenv/config.js';
 import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
@@ -8,6 +7,7 @@ import { RepositoryManager } from './repository-manager.js';
 import { PortManager } from './port-manager.js';
 import { executePipeline } from './orchestrator.js';
 import { CodePersister } from './code-persister.js';
+import { CodeIntegrator } from './code-integrator.js';
 import dashboardMonitor from './dashboard-monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -83,7 +83,7 @@ app.get('/api/pipeline', (req, res) => {
     const docsPath = path.join(__dirname, 'docs');
     
     if (!fs.existsSync(docsPath)) {
-      return res.json({ count: 0, pipelines: [] });
+      res.json({ count: 0, pipelines: [] });
     }
     
     const pipelines = fs.readdirSync(docsPath)
@@ -130,25 +130,41 @@ app.post('/api/pipeline/external', async (req, res) => {
     // Execute pipeline
     const pipelineExecution = await executePipeline(requirement, executionId);
     
-    // Persist generated code and pipeline output to repository
+    // Integrate generated code into repository files
     try {
-      console.log('📝 Persistindo código gerado no repositório...');
+      console.log('📝 Integrando código gerado nos arquivos do repositório...');
       
-      // Persistir código gerado
+      // Integrar código gerado nos arquivos originais
       if (pipelineExecution.stages.development && pipelineExecution.stages.development.result) {
-        await CodePersister.persistCode(
+        const generatedCode = pipelineExecution.stages.development.result;
+        const language = generatedCode.language || 'javascript';
+        
+        // Criar backup dos arquivos originais
+        const backup = CodeIntegrator.createBackup(repoPath);
+        if (backup.success) {
+          console.log(`💾 Backup criado: ${backup.filesBackedUp} arquivo(s)`);
+        }
+        
+        // Integrar código nos arquivos principais
+        const integration = await CodeIntegrator.integrateIntoRepository(
           repoPath,
-          pipelineExecution.stages.development.result,
-          requirement
+          generatedCode,
+          language
         );
+        
+        if (integration.success) {
+          console.log(`✅ ${integration.message}`);
+        } else {
+          console.warn(`⚠️ ${integration.message}`);
+        }
       }
       
-      // Persistir saída completa do pipeline
+      // Persistir saída completa do pipeline (metadados e documentação)
       await CodePersister.persistPipelineOutput(repoPath, pipelineExecution);
       
-      console.log('✅ Código e saída do pipeline persistidos');
+      console.log('✅ Código integrado e documentação persistida');
     } catch (persistError) {
-      console.warn('⚠️ Erro ao persistir código: ' + persistError.message);
+      console.warn('⚠️ Erro ao integrar código: ' + persistError.message);
     }
     
     // Auto-commit and push if enabled
@@ -193,6 +209,7 @@ app.post('/api/pipeline/external', async (req, res) => {
       status: 'completed'
     });
   } catch (error) {
+    console.error('Pipeline execution error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -275,60 +292,15 @@ app.post('/api/pipeline/external/:executionId/commit', async (req, res) => {
   }
 });
 
-// Push changes to external repository
-app.post('/api/pipeline/external/:executionId/push', async (req, res) => {
-  try {
-    const { executionId } = req.params;
-    const { githubToken = null } = req.body;
-    
-    const workspacePath = path.join(__dirname, 'workspaces', executionId);
-    const repoPath = path.join(workspacePath, 'repo');
-    
-    if (!fs.existsSync(repoPath)) {
-      return res.status(404).json({ error: 'Repository not found' });
-    }
-    
-    await repositoryManager.pushChanges(repoPath, githubToken);
-    
-    res.json({
-      executionId,
-      status: 'success',
-      message: 'Changes pushed to repository'
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Dashboard routes
-app.use('/api/dashboard', dashboardMonitor);
+app.use('/dashboard', dashboardMonitor);
 
-// Serve frontend
-app.use(express.static('public'));
-
-// Serve documentation files
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
 app.use('/docs', express.static(path.join(__dirname, 'docs')));
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`\n🚀 Manus Pipeline Executor Server`);
-  console.log(`📍 Running on http://localhost:${PORT}`);
-  console.log(`🔑 OpenAI API Key: ${process.env.OPENAI_API_KEY ? '✅ Configured' : '❌ Missing'}`);
-  console.log(`\nEndpoints:`);
-  console.log(`  GET  /health                           - Health check`);
-  console.log(`  POST /api/pipeline/execute             - Execute pipeline on requirement`);
-  console.log(`  POST /api/pipeline/external            - Execute pipeline on external repository (with auto-commit)`);
-  console.log(`  GET  /api/pipeline/:id                 - Get pipeline execution`);
-  console.log(`  GET  /api/pipeline/external/:execId    - Get external execution status`);
-  console.log(`  POST /api/pipeline/external/:execId/commit - Commit changes to repository`);
-  console.log(`  POST /api/pipeline/external/:execId/push   - Push changes to repository`);
-  console.log(`  GET  /api/deployments                  - List all active deployments`);
-  console.log(`  GET  /api/dashboard/stats              - Dashboard statistics`);
-  console.log(`  GET  /api/dashboard/distribution       - Distribution by type`);
-  console.log(`  GET  /api/dashboard/errors             - Most common errors`);
-  console.log(`  GET  /api/dashboard/time-saved         - Time saved`);
-  console.log(`  GET  /api/dashboard/executions         - List executions`);
-  console.log(`  GET  /api/dashboard/timeline           - Timeline 24h`);
-  console.log(`  GET  /api/dashboard/performance        - Performance by stage`);
-  console.log(`  GET  /api/dashboard/health             - Dashboard health\n`);
+  console.log(`✅ Pipeline Executor running on port ${PORT}`);
+  console.log(`📊 Dashboard: http://localhost:${PORT}/dashboard.html`);
 });
