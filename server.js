@@ -8,6 +8,7 @@ import { initializeDatabase, queryDatabase, getAllTables } from './db.js';
 import { executePipeline, getPipelineExecution, getAllPipelineExecutions, generateDashboardQuery } from './orchestrator.js';
 import { RepositoryManager } from './repository-manager.js';
 import { PortManager } from './port-manager.js';
+import dashboardRouter from './dashboard-monitor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -322,6 +323,9 @@ app.post('/api/pipeline/external/:executionId/commit', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Dashboard routes
+app.use('/api/dashboard', dashboardRouter);
 
 // Serve frontend
 app.use(express.static('public'));
