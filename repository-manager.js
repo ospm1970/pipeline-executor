@@ -133,6 +133,21 @@ export class RepositoryManager {
     try {
       console.log(`📝 Fazendo commit das alterações...`);
       
+      // Configurar git user se não estiver configurado
+      try {
+        const escapedRepoPath = process.platform === 'win32' ? `"${repoPath}"` : `'${repoPath}'`;
+        const configCommand = process.platform === 'win32'
+          ? `cd "${repoPath}" && git config user.email "pipeline@executor.local" && git config user.name "Pipeline Executor"`
+          : `cd '${repoPath}' && git config user.email "pipeline@executor.local" && git config user.name "Pipeline Executor"`;
+        
+        await execAsync(configCommand, {
+          shell: true,
+          maxBuffer: 10 * 1024 * 1024,
+        });
+      } catch (configError) {
+        console.warn(`⚠️ Erro ao configurar git user: ${configError.message}`);
+      }
+      
       // Usar quotes para proteger caminhos com espaços
       const escapedRepoPath = process.platform === 'win32' ? `"${repoPath}"` : `'${repoPath}'`;
       const escapedMessage = message.replace(/"/g, '\\"');
