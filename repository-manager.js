@@ -81,46 +81,60 @@ export class RepositoryManager {
       // Escapar a mensagem de commit para evitar problemas com caracteres especiais
       const escapedMessage = message.replace(/"/g, '\\"');
 
-      // Configurar git user se não estiver configurado
+      // Configurar identidade git
       try {
         const configCommand = process.platform === 'win32'
           ? `cd "${repoPath}" && git config user.email "pipeline@executor.local" && git config user.name "Pipeline Executor"`
           : `cd '${repoPath}' && git config user.email "pipeline@executor.local" && git config user.name "Pipeline Executor"`;
-        
-      const { stdout: configStdout, stderr: configStderr } = await execAsync(configCommand, {
-        shell: true,
-        maxBuffer: 10 * 1024 * 1024,
-      });
-      if (configStdout) console.log(`Git config stdout: ${configStdout}`);
-      if (configStderr) console.log(`Git config stderr: ${configStderr}`);
+        await execAsync(configCommand, { shell: true, maxBuffer: 10 * 1024 * 1024 });
       } catch (configError) {
         console.warn(`⚠️ Erro ao configurar git user: ${configError.message}`);
       }
-      
-      const command = process.platform === 'win32' 
-        ? `cd "${repoPath}" && git add . && git commit -m "${escapedMessage}"`
-        : `cd '${repoPath}' && git add . && git commit -m "${escapedMessage}"`;
-      
-      const { stdout, stderr } = await execAsync(command, {
-        shell: true,
-        maxBuffer: 10 * 1024 * 1024,
-      });
+
+      // git add .
+      const addCommand = process.platform === 'win32'
+        ? `cd "${repoPath}" && git add .`
+        : `cd '${repoPath}' && git add .`;
+      await execAsync(addCommand, { shell: true, maxBuffer: 10 * 1024 * 1024 });
+
+      // Diagnóstico: status
+      const { stdout: statusOut } = await execAsync(
+        process.platform === 'win32' ? `cd "${repoPath}" && git status` : `cd '${repoPath}' && git status`,
+        { shell: true, maxBuffer: 10 * 1024 * 1024 }
+      );
+      console.log(`🔍 Git status:\n${statusOut}`);
+
+      // Diagnóstico: arquivos staged
+      const { stdout: diffOut } = await execAsync(
+        process.platform === 'win32' ? `cd "${repoPath}" && git diff --cached --name-only` : `cd '${repoPath}' && git diff --cached --name-only`,
+        { shell: true, maxBuffer: 10 * 1024 * 1024 }
+      );
+      console.log(`🔍 Arquivos staged:\n${diffOut || '(nenhum)'}`);
+
+      // Diagnóstico: identidade configurada
+      const { stdout: emailOut } = await execAsync(
+        process.platform === 'win32' ? `cd "${repoPath}" && git config user.email` : `cd '${repoPath}' && git config user.email`,
+        { shell: true, maxBuffer: 10 * 1024 * 1024 }
+      ).catch(() => ({ stdout: 'NÃO CONFIGURADO' }));
+      console.log(`🔍 Git user.email: ${emailOut.trim()}`);
+
+      // git commit
+      const commitCommand = process.platform === 'win32'
+        ? `cd "${repoPath}" && git commit -m "${escapedMessage}"`
+        : `cd '${repoPath}' && git commit -m "${escapedMessage}"`;
+      const { stdout, stderr } = await execAsync(commitCommand, { shell: true, maxBuffer: 10 * 1024 * 1024 });
       if (stdout) console.log(`Commit stdout: ${stdout}`);
       if (stderr) console.log(`Commit stderr: ${stderr}`);
       console.log(`✅ Alterações comitadas com sucesso`);
       return true;
     } catch (error) {
-      // Mostrar erro completo para debugging
-      console.error(`❌ Erro completo do git: ${error.message}`);
-      if (error.stderr) console.error(`stderr: ${error.stderr}`);
-      if (error.stdout) console.error(`stdout: ${error.stdout}`);
-      
+      console.error(`❌ ERRO COMPLETO: ${JSON.stringify({ message: error.message, stderr: error.stderr, stdout: error.stdout, code: error.code }, null, 2)}`);
+
       // Se não há mudanças, não é um erro
       if (error.message.includes('nothing to commit')) {
         console.log(`ℹ️ Nenhuma alteração para comitar`);
         return true;
       }
-      console.error(`❌ Erro ao fazer commit:`, error.message);
       throw new Error(`Falha ao fazer commit: ${error.message}`);
     }
   }
@@ -198,16 +212,27 @@ export class RepositoryManager {
       const cleanRemoteUrl = remoteUrlOutput.trim();
       console.log(`📍 URL remota do repositório: ${cleanRemoteUrl}`);
 
-      // Detectar branch atual em vez de usar 'main' hardcoded
-      const getBranchCommand = process.platform === 'win32'
-        ? `cd "${repoPath}" && git rev-parse --abbrev-ref HEAD`
-        : `cd '${repoPath}' && git rev-parse --abbrev-ref HEAD`;
+      // Diagnóstico: branch atual
+      const { stdout: branchOut } = await execAsync(
+        process.platform === 'win32' ? `cd "${repoPath}" && git branch --show-current` : `cd '${repoPath}' && git branch --show-current`,
+        { shell: true, maxBuffer: 10 * 1024 * 1024 }
+      );
+      console.log(`🔍 Branch atual: ${branchOut.trim()}`);
+      const currentBranch = branchOut.trim();
 
-      const { stdout: branchOutput } = await execAsync(getBranchCommand, {
-        shell: true,
-        maxBuffer: 10 * 1024 * 1024,
-      });
-      const currentBranch = branchOutput.trim();
+      // Diagnóstico: últimos commits
+      const { stdout: logOut } = await execAsync(
+        process.platform === 'win32' ? `cd "${repoPath}" && git log --oneline -3` : `cd '${repoPath}' && git log --oneline -3`,
+        { shell: true, maxBuffer: 10 * 1024 * 1024 }
+      ).catch(() => ({ stdout: '(sem commits)' }));
+      console.log(`🔍 Últimos commits:\n${logOut}`);
+
+      // Diagnóstico: remotes configurados
+      const { stdout: remoteOut } = await execAsync(
+        process.platform === 'win32' ? `cd "${repoPath}" && git remote -v` : `cd '${repoPath}' && git remote -v`,
+        { shell: true, maxBuffer: 10 * 1024 * 1024 }
+      );
+      console.log(`🔍 Remotes:\n${remoteOut}`);
 
       // Se token foi fornecido, adicionar credenciais à URL (somente se ainda não contiver @)
       let remoteUrl = cleanRemoteUrl;
@@ -220,18 +245,19 @@ export class RepositoryManager {
       const pushCommand = process.platform === 'win32'
         ? `cd "${repoPath}" && git push ${remoteUrl} ${currentBranch}`
         : `cd '${repoPath}' && git push ${remoteUrl} ${currentBranch}`;
-      
+
       const { stdout, stderr } = await execAsync(pushCommand, {
         shell: true,
         maxBuffer: 10 * 1024 * 1024,
       });
-      
+
       if (stdout) console.log(`Push stdout: ${stdout}`);
       if (stderr) console.log(`Push stderr: ${stderr}`);
-      
+
       console.log(`✅ Push realizado com sucesso`);
       return true;
     } catch (error) {
+      console.error(`❌ ERRO COMPLETO: ${JSON.stringify({ message: error.message, stderr: error.stderr, stdout: error.stdout, code: error.code }, null, 2)}`);
       // Se falhar, pode ser porque não há mudanças ou permissão negada
       if (error.message.includes('nothing to push') || error.message.includes('up to date')) {
         console.log(`ℹ️ Nada para fazer push`);
