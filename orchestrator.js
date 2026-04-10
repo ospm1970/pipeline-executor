@@ -1,7 +1,4 @@
 import { analystAgent, developerAgent, qaAgent, devopsAgent } from './agents.js';
-import { queryDatabase, getAllTables, getTableSchema } from './db.js';
-import { generateSQLQuery, validateSQL } from './sql-generator-v2.js';
-import { fixSQL } from './sql-fixer.js';
 import { UIUXAgentWithSkill } from './agents-ux.js';
 import { SpecAgentWithSkill } from './agents-spec.js';
 import DocumenterAgentWithSkill from './agents-documenter.js';
@@ -276,49 +273,8 @@ export function getAllPipelineExecutions() {
   return Array.from(pipelineExecutions.values());
 }
 
-export async function generateDashboardQuery(requirement) {
-  try {
-    console.log('\n📊 GENERATING DASHBOARD QUERY');
-    
-    // Get available tables
-    const tables = await getAllTables();
-    const tableSchemas = {};
-    
-    for (const table of tables) {
-      tableSchemas[table] = await getTableSchema(table);
-    }
-
-    // Generate SQL query using V2 generator with fallback
-    const sqlResult = await generateSQLQuery(requirement, tableSchemas);
-    let sqlQuery = sqlResult.query;
-
-    // Fix common SQL issues (unquoted strings, etc)
-    const fixResult = await fixSQL(sqlQuery);
-    sqlQuery = fixResult.query;
-
-    // Validate SQL syntax
-    await validateSQL(sqlQuery);
-    
-    console.log('✅ Final SQL:', sqlQuery);
-    
-    // Execute the query
-    const data = await queryDatabase(sqlQuery);
-    
-    return {
-      query: sqlQuery,
-      data,
-      rowCount: data.length,
-      generatedAt: new Date()
-    };
-  } catch (error) {
-    console.error('❌ Error generating dashboard query:', error.message);
-    throw error;
-  }
-}
-
 export default {
   executePipeline,
   getPipelineExecution,
-  getAllPipelineExecutions,
-  generateDashboardQuery
+  getAllPipelineExecutions
 };
