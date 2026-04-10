@@ -183,8 +183,13 @@ app.post('/api/pipeline/external', async (req, res) => {
           console.log(`✅ Changes pushed to GitHub`);
         }
       } catch (commitError) {
-        console.error(`⚠️ Auto-commit/push failed: ${commitError.message}`);
+        console.warn(`⚠️ Auto-commit/push failed: ${commitError.message}`);
         // Don't fail the pipeline if commit fails
+        pipelineExecution.logs.push({
+          timestamp: new Date(),
+          message: `Auto-commit/push failed: ${commitError.message}`,
+          level: 'warning'
+        });
       }
     }
     
