@@ -112,7 +112,8 @@ app.get('/api/pipeline', (req, res) => {
 // Execute pipeline on external repository
 app.post('/api/pipeline/external', async (req, res) => {
   try {
-    const { repositoryUrl, requirement, githubToken, autoCommit = true } = req.body;
+    const { repositoryUrl, requirement, autoCommit = true } = req.body;
+    const githubToken = req.body.githubToken || process.env.GITHUB_TOKEN || null;
     
     if (!repositoryUrl || !requirement) {
       return res.status(400).json({ error: 'Repository URL and requirement are required' });
