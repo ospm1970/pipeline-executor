@@ -169,17 +169,21 @@ app.post('/api/pipeline/external', async (req, res) => {
     }
     
     // Auto-commit and push if enabled
+    let committed = false;
+    let pushed = false;
     if (autoCommit) {
       try {
         console.log(`📝 Auto-committing changes for ${executionId}...`);
         const commitMessage = `feat: ${requirement.substring(0, 50)}...`;
         await repositoryManager.commitChanges(repoPath, commitMessage);
+        committed = true;
         console.log(`✅ Changes committed`);
-        
+
         // Auto-push if token is provided
         if (githubToken) {
           console.log(`📤 Auto-pushing changes for ${executionId}...`);
           await repositoryManager.pushChanges(repoPath, githubToken);
+          pushed = true;
           console.log(`✅ Changes pushed to GitHub`);
         }
       } catch (commitError) {
@@ -192,7 +196,7 @@ app.post('/api/pipeline/external', async (req, res) => {
         });
       }
     }
-    
+
     res.json({
       executionId,
       pipelineId: pipelineExecution.pipelineId,
@@ -209,8 +213,8 @@ app.post('/api/pipeline/external', async (req, res) => {
       },
       autoCommit: {
         enabled: autoCommit,
-        committed: autoCommit,
-        pushed: autoCommit && !!githubToken
+        committed,
+        pushed
       },
       status: 'completed'
     });

@@ -184,30 +184,42 @@ export class RepositoryManager {
   async pushChanges(repoPath, githubToken = null) {
     try {
       console.log(`📤 Fazendo push das alterações...`);
-      
+
       // Obter a URL remota original do repositório
-      let getRemoteCommand = process.platform === 'win32'
+      const getRemoteCommand = process.platform === 'win32'
         ? `cd "${repoPath}" && git config --get remote.origin.url`
         : `cd '${repoPath}' && git config --get remote.origin.url`;
-      
+
       const { stdout: remoteUrlOutput } = await execAsync(getRemoteCommand, {
         shell: true,
         maxBuffer: 10 * 1024 * 1024,
       });
-      
-      let remoteUrl = remoteUrlOutput.trim();
-      console.log(`📍 URL remota do repositório: ${remoteUrl}`);
-      
-      // Se token foi fornecido, adicionar credenciais à URL
-      if (githubToken && remoteUrl.includes('github.com')) {
+
+      const cleanRemoteUrl = remoteUrlOutput.trim();
+      console.log(`📍 URL remota do repositório: ${cleanRemoteUrl}`);
+
+      // Detectar branch atual em vez de usar 'main' hardcoded
+      const getBranchCommand = process.platform === 'win32'
+        ? `cd "${repoPath}" && git rev-parse --abbrev-ref HEAD`
+        : `cd '${repoPath}' && git rev-parse --abbrev-ref HEAD`;
+
+      const { stdout: branchOutput } = await execAsync(getBranchCommand, {
+        shell: true,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      const currentBranch = branchOutput.trim();
+
+      // Se token foi fornecido, adicionar credenciais à URL (somente se ainda não contiver @)
+      let remoteUrl = cleanRemoteUrl;
+      if (githubToken && remoteUrl.includes('github.com') && !remoteUrl.includes('@')) {
         remoteUrl = remoteUrl.replace('https://', `https://${githubToken}@`);
         console.log(`🔐 Usando autenticação com token`);
       }
-      
-      // Construir comando de push
-      let pushCommand = process.platform === 'win32'
-        ? `cd "${repoPath}" && git push ${remoteUrl} main`
-        : `cd '${repoPath}' && git push ${remoteUrl} main`;
+
+      // Construir comando de push usando o branch atual
+      const pushCommand = process.platform === 'win32'
+        ? `cd "${repoPath}" && git push ${remoteUrl} ${currentBranch}`
+        : `cd '${repoPath}' && git push ${remoteUrl} ${currentBranch}`;
       
       const { stdout, stderr } = await execAsync(pushCommand, {
         shell: true,
