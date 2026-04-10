@@ -55,12 +55,13 @@ export async function executePipeline(requirement, executionId = null, repositor
     }
     
     const specAgent = new SpecAgentWithSkill();
+    const specStart = Date.now();
     const specification = await specAgent.generateSpecification(requirementWithContext);
-    
+
     execution.stages.specification = {
       status: 'completed',
       result: specification,
-      duration: '3s'
+      duration: `${Date.now() - specStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'Specification created', level: 'success' });
     console.log('✅ Specification completed');
@@ -86,11 +87,12 @@ export async function executePipeline(requirement, executionId = null, repositor
     
     // Pass the specification to the analyst instead of just the raw requirement
     const specString = JSON.stringify(specification);
+    const analysisStart = Date.now();
     const analysis = await analystAgent(`Based on this specification, generate user stories and technical requirements:\n${specString}`);
     execution.stages.analysis = {
       status: 'completed',
       result: analysis,
-      duration: '2s'
+      duration: `${Date.now() - analysisStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'Analysis completed', level: 'success' });
     console.log('✅ Analysis completed:', analysis);
@@ -117,11 +119,12 @@ export async function executePipeline(requirement, executionId = null, repositor
     const uiuxAgent = new UIUXAgentWithSkill();
     const userStories = analysis.user_stories || [];
     const requirements = analysis.technical_requirements || [];
+    const uxStart = Date.now();
     const designSpecs = await uiuxAgent.applySkillToDesign(userStories, requirements);
     execution.stages.ux_design = {
       status: 'completed',
       result: designSpecs,
-      duration: '3s'
+      duration: `${Date.now() - uxStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'Design specifications created', level: 'success' });
     console.log('✅ UI/UX Design completed');
@@ -146,11 +149,12 @@ export async function executePipeline(requirement, executionId = null, repositor
     execution.logs.push({ timestamp: new Date(), message: 'Starting development stage...', level: 'info' });
     
     const devSpecString = JSON.stringify(analysis);
+    const devStart = Date.now();
     const code = await developerAgent(devSpecString);
     execution.stages.development = {
       status: 'completed',
       result: code,
-      duration: '5s'
+      duration: `${Date.now() - devStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'Code generated', level: 'success' });
     console.log('✅ Code generated');
@@ -175,11 +179,12 @@ export async function executePipeline(requirement, executionId = null, repositor
     execution.logs.push({ timestamp: new Date(), message: 'Starting QA stage...', level: 'info' });
     
     const codeString = JSON.stringify(code);
+    const qaStart = Date.now();
     const qaResult = await qaAgent(codeString);
     execution.stages.qa = {
       status: 'completed',
       result: qaResult,
-      duration: '3s'
+      duration: `${Date.now() - qaStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'QA tests completed', level: 'success' });
     console.log('✅ QA completed:', qaResult);
@@ -203,11 +208,12 @@ export async function executePipeline(requirement, executionId = null, repositor
     console.log('\n🚀 STAGE 5: DEVOPS/DEPLOYMENT');
     execution.logs.push({ timestamp: new Date(), message: 'Starting deployment stage...', level: 'info' });
     
+    const deployStart = Date.now();
     const deployment = await devopsAgent(codeString);
     execution.stages.deployment = {
       status: 'completed',
       result: deployment,
-      duration: '4s'
+      duration: `${Date.now() - deployStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'Deployment plan created', level: 'success' });
     console.log('✅ Deployment completed:', deployment);
@@ -283,13 +289,15 @@ export async function generateDashboardQuery(requirement) {
     }
 
     // Generate SQL query using V2 generator with fallback
-    let sqlQuery = await generateSQLQuery(requirement, tableSchemas);
-    
+    const sqlResult = await generateSQLQuery(requirement, tableSchemas);
+    let sqlQuery = sqlResult.query;
+
     // Fix common SQL issues (unquoted strings, etc)
-    sqlQuery = fixSQL(sqlQuery);
-    
+    const fixResult = await fixSQL(sqlQuery);
+    sqlQuery = fixResult.query;
+
     // Validate SQL syntax
-    validateSQL(sqlQuery);
+    await validateSQL(sqlQuery);
     
     console.log('✅ Final SQL:', sqlQuery);
     
