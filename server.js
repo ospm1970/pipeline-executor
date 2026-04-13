@@ -320,13 +320,12 @@ app.use('/dashboard', dashboardMonitor);
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/docs', express.static(path.join(__dirname, 'docs')));
 
-export default app;
-
-// Start server only when run directly
 if (process.argv[1] === __filename) {
-  loadExecutionsFromDisk();
   app.listen(PORT, () => {
     console.log(`✅ Pipeline Executor running on port ${PORT}`);
     console.log(`📊 Dashboard: http://localhost:${PORT}/dashboard.html`);
+    loadExecutionsFromDisk();
   });
 }
+
+export default app;
