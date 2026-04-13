@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { withRetry } from './retry.js';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -228,23 +229,27 @@ Original requirement: ${requirement}
 
 Respond ONLY with the JSON object, nothing else.`;
   
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4.1-mini',
-    temperature: 0.1,
-    max_tokens: 2000,
-    messages: [
-      {
-        role: 'system',
-        content: `You are a JSON generator. Your ONLY job is to generate valid JSON that can be parsed. 
-        
+  const response = await withRetry(
+    () => openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+      temperature: 0.1,
+      max_tokens: 2000,
+      timeout: 30000,
+      messages: [
+        {
+          role: 'system',
+          content: `You are a JSON generator. Your ONLY job is to generate valid JSON that can be parsed.
+
 CRITICAL: Respond ONLY with valid JSON. No markdown, no explanations, no extra text whatsoever.`
-      },
-      {
-        role: 'user',
-        content: correctionPrompt
-      }
-    ]
-  });
+        },
+        {
+          role: 'user',
+          content: correctionPrompt
+        }
+      ]
+    }),
+    { label: 'autoCorrectJSON' }
+  );
   
   const content = response.choices[0].message.content;
   return extractJSON(content);
@@ -257,15 +262,17 @@ export async function analystAgent(requirement) {
     
     const requiredFields = ['user_stories', 'technical_requirements', 'estimated_effort_hours', 'risks', 'acceptance_criteria'];
     
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4.1-mini',
-      temperature: 0.3,
-      max_tokens: 1500,
-      messages: [
-        {
-          role: 'system',
-          content: `You are a senior software analyst. Your job is to analyze requirements and create detailed technical specifications.
-          
+    const response = await withRetry(
+      () => openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+        temperature: 0.3,
+        max_tokens: 1500,
+        timeout: 30000,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a senior software analyst. Your job is to analyze requirements and create detailed technical specifications.
+
 CRITICAL: Always respond with VALID JSON only. No markdown code blocks, no extra text, just pure JSON.
 
 Respond in JSON format with the following structure:
@@ -276,13 +283,15 @@ Respond in JSON format with the following structure:
   "risks": ["risk1", "risk2"],
   "acceptance_criteria": ["criteria1", "criteria2"]
 }`
-        },
-        {
-          role: 'user',
-          content: `Analyze this requirement: ${requirement}`
-        }
-      ]
-    });
+          },
+          {
+            role: 'user',
+            content: `Analyze this requirement: ${requirement}`
+          }
+        ]
+      }),
+      { label: 'analystAgent' }
+    );
 
     let analysis = extractJSON(response.choices[0].message.content);
     
@@ -312,15 +321,17 @@ export async function developerAgent(specification) {
     
     const requiredFields = ['code', 'language', 'functions', 'dependencies', 'code_quality_score'];
     
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4.1-mini',
-      temperature: 0.5,
-      max_tokens: 2500,
-      messages: [
-        {
-          role: 'system',
-          content: `You are a senior software developer. Your job is to write clean, well-structured code.
-          
+    const response = await withRetry(
+      () => openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+        temperature: 0.5,
+        max_tokens: 2500,
+        timeout: 30000,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a senior software developer. Your job is to write clean, well-structured code.
+
 CRITICAL: Always respond with VALID JSON only. No markdown code blocks, no extra text, just pure JSON.
 
 Respond in JSON format with the following structure:
@@ -331,13 +342,15 @@ Respond in JSON format with the following structure:
   "dependencies": ["dep1", "dep2"],
   "code_quality_score": 85
 }`
-        },
-        {
-          role: 'user',
-          content: `Generate code for this specification: ${specification}`
-        }
-      ]
-    });
+          },
+          {
+            role: 'user',
+            content: `Generate code for this specification: ${specification}`
+          }
+        ]
+      }),
+      { label: 'developerAgent' }
+    );
 
     let code = extractJSON(response.choices[0].message.content);
     
@@ -367,15 +380,17 @@ export async function qaAgent(code) {
     
     const requiredFields = ['test_cases', 'issues_found', 'coverage_percentage', 'approved', 'recommendations'];
     
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4.1-mini',
-      temperature: 0.3,
-      max_tokens: 1500,
-      messages: [
-        {
-          role: 'system',
-          content: `You are a QA engineer. Your job is to test code and identify issues.
-          
+    const response = await withRetry(
+      () => openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+        temperature: 0.3,
+        max_tokens: 1500,
+        timeout: 30000,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a QA engineer. Your job is to test code and identify issues.
+
 CRITICAL: Always respond with VALID JSON only. No markdown code blocks, no extra text, just pure JSON.
 
 Respond in JSON format with the following structure:
@@ -386,13 +401,15 @@ Respond in JSON format with the following structure:
   "approved": true,
   "recommendations": ["rec1"]
 }`
-        },
-        {
-          role: 'user',
-          content: `Test and validate this code: ${code}`
-        }
-      ]
-    });
+          },
+          {
+            role: 'user',
+            content: `Test and validate this code: ${code}`
+          }
+        ]
+      }),
+      { label: 'qaAgent' }
+    );
 
     let testResult = extractJSON(response.choices[0].message.content);
     
@@ -422,15 +439,17 @@ export async function devopsAgent(code) {
     
     const requiredFields = ['deployment_steps', 'environment', 'health_checks', 'rollback_plan', 'estimated_deployment_time_minutes', 'deployment_approved'];
     
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4.1-mini',
-      temperature: 0.3,
-      max_tokens: 1500,
-      messages: [
-        {
-          role: 'system',
-          content: `You are a DevOps engineer. Your job is to plan and execute deployments.
-          
+    const response = await withRetry(
+      () => openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+        temperature: 0.3,
+        max_tokens: 1500,
+        timeout: 30000,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a DevOps engineer. Your job is to plan and execute deployments.
+
 CRITICAL: Always respond with VALID JSON only. No markdown code blocks, no extra text, just pure JSON.
 
 Respond in JSON format with the following structure:
@@ -442,13 +461,15 @@ Respond in JSON format with the following structure:
   "estimated_deployment_time_minutes": 15,
   "deployment_approved": true
 }`
-        },
-        {
-          role: 'user',
-          content: `Plan deployment for this code: ${code}`
-        }
-      ]
-    });
+          },
+          {
+            role: 'user',
+            content: `Plan deployment for this code: ${code}`
+          }
+        ]
+      }),
+      { label: 'devopsAgent' }
+    );
 
     let deployment = extractJSON(response.choices[0].message.content);
     

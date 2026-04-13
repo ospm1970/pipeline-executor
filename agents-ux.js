@@ -7,6 +7,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
+import { withRetry } from './retry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -329,21 +330,25 @@ Return as JSON:
     const openai = new OpenAI({ apiKey });
 
     try {
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4.1-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an expert UI/UX Designer. Provide detailed, actionable design specifications. Always respond with valid JSON when requested.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 2000
-      });
+      const response = await withRetry(
+        () => openai.chat.completions.create({
+          model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert UI/UX Designer. Provide detailed, actionable design specifications. Always respond with valid JSON when requested.'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 2000,
+          timeout: 30000
+        }),
+        { label: 'uiuxAgent' }
+      );
 
       return response.choices[0].message.content;
     } catch (error) {

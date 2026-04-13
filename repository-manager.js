@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import logger from './logger.js';
 
 const execAsync = promisify(exec);
 
@@ -48,10 +49,10 @@ export class RepositoryManager {
       let cloneUrl = repoUrl;
       if (githubToken && repoUrl.includes('github.com')) {
         cloneUrl = repoUrl.replace('https://', `https://${githubToken}@`);
-        console.log(`🔐 Usando autenticação com token para clone`);
+        logger.info('Usando autenticação com token para clone');
       }
 
-      console.log(`📥 Clonando repositório: ${repoUrl}`);
+      logger.info('Clonando repositório', { url: repoUrl });
 
       // Usar quotes para proteger caminhos com espaços
       const cloneCommand = process.platform === 'win32'
@@ -63,10 +64,10 @@ export class RepositoryManager {
         maxBuffer: 10 * 1024 * 1024,
       });
 
-      console.log(`✅ Repositório clonado com sucesso em: ${repoPath}`);
+      logger.info('Repositório clonado com sucesso', { repoPath });
       return repoPath;
     } catch (error) {
-      console.error(`❌ Erro ao clonar repositório:`, error.message);
+      logger.error('Erro ao clonar repositório', { error: error.message });
       throw new Error(`Falha ao clonar repositório: ${error.message}`);
     }
   }
@@ -76,7 +77,7 @@ export class RepositoryManager {
    */
   async commitChanges(repoPath, message) {
     try {
-      console.log(`📝 Fazendo commit das alterações...`);
+      logger.info('Fazendo commit das alterações');
 
       // Escapar a mensagem de commit para evitar problemas com caracteres especiais
       const escapedMessage = message.replace(/"/g, '\\"');
@@ -88,7 +89,7 @@ export class RepositoryManager {
           : `cd '${repoPath}' && git config user.email "pipeline@executor.local" && git config user.name "Pipeline Executor"`;
         await execAsync(configCommand, { shell: true, maxBuffer: 10 * 1024 * 1024 });
       } catch (configError) {
-        console.warn(`⚠️ Erro ao configurar git user: ${configError.message}`);
+        logger.warn('Erro ao configurar git user', { error: configError.message });
       }
 
       // git add .
@@ -97,46 +98,34 @@ export class RepositoryManager {
         : `cd '${repoPath}' && git add .`;
       await execAsync(addCommand, { shell: true, maxBuffer: 10 * 1024 * 1024 });
 
-      // Diagnóstico: status
-      const { stdout: statusOut } = await execAsync(
-        process.platform === 'win32' ? `cd "${repoPath}" && git status` : `cd '${repoPath}' && git status`,
-        { shell: true, maxBuffer: 10 * 1024 * 1024 }
-      );
-      console.log(`🔍 Git status:\n${statusOut}`);
-
-      // Diagnóstico: arquivos staged
-      const { stdout: diffOut } = await execAsync(
-        process.platform === 'win32' ? `cd "${repoPath}" && git diff --cached --name-only` : `cd '${repoPath}' && git diff --cached --name-only`,
-        { shell: true, maxBuffer: 10 * 1024 * 1024 }
-      );
-      console.log(`🔍 Arquivos staged:\n${diffOut || '(nenhum)'}`);
-
-      // Diagnóstico: identidade configurada
-      const { stdout: emailOut } = await execAsync(
-        process.platform === 'win32' ? `cd "${repoPath}" && git config user.email` : `cd '${repoPath}' && git config user.email`,
-        { shell: true, maxBuffer: 10 * 1024 * 1024 }
-      ).catch(() => ({ stdout: 'NÃO CONFIGURADO' }));
-      console.log(`🔍 Git user.email: ${emailOut.trim()}`);
-
       // git commit
       const commitCommand = process.platform === 'win32'
         ? `cd "${repoPath}" && git commit -m "${escapedMessage}"`
         : `cd '${repoPath}' && git commit -m "${escapedMessage}"`;
-      const { stdout, stderr } = await execAsync(commitCommand, { shell: true, maxBuffer: 10 * 1024 * 1024 });
-      if (stdout) console.log(`Commit stdout: ${stdout}`);
-      if (stderr) console.log(`Commit stderr: ${stderr}`);
-      console.log(`✅ Alterações comitadas com sucesso`);
+      await execAsync(commitCommand, { shell: true, maxBuffer: 10 * 1024 * 1024 });
+      logger.info('Alterações comitadas com sucesso');
       return true;
     } catch (error) {
-      console.error(`❌ ERRO COMPLETO: ${JSON.stringify({ message: error.message, stderr: error.stderr, stdout: error.stdout, code: error.code }, null, 2)}`);
-
       // Se não há mudanças, não é um erro
       if (error.message.includes('nothing to commit')) {
-        console.log(`ℹ️ Nenhuma alteração para comitar`);
+        logger.info('Nenhuma alteração para comitar');
         return true;
       }
+      logger.error('Erro ao fazer commit', { error: error.message });
       throw new Error(`Falha ao fazer commit: ${error.message}`);
     }
+  }
+
+  /**
+   * Cria um novo branch no repositório
+   */
+  async createBranch(repoPath, branchName) {
+    const cmd = process.platform === 'win32'
+      ? `cd "${repoPath}" && git checkout -b "${branchName}"`
+      : `cd '${repoPath}' && git checkout -b '${branchName}'`;
+    await execAsync(cmd, { shell: true });
+    logger.info('Branch criado', { branchName });
+    return branchName;
   }
 
   /**
@@ -161,7 +150,7 @@ export class RepositoryManager {
         path: repoPath,
       };
     } catch (error) {
-      console.error(`❌ Erro ao obter informações do repositório:`, error.message);
+      logger.error('Erro ao obter informações do repositório', { error: error.message });
       return {
         name: 'unknown',
         version: '1.0.0',
@@ -186,7 +175,7 @@ export class RepositoryManager {
         path: path.join(this.baseWorkspacePath, ws),
       }));
     } catch (error) {
-      console.error(`❌ Erro ao listar workspaces:`, error.message);
+      logger.error('Erro ao listar workspaces', { error: error.message });
       return [];
     }
   }
@@ -195,9 +184,9 @@ export class RepositoryManager {
    * Faz push das alterações para o repositório remoto
    * Usa a URL remota original do repositório clonado
    */
-  async pushChanges(repoPath, githubToken = null) {
+  async pushChanges(repoPath, githubToken = null, branchName = null) {
     try {
-      console.log(`📤 Fazendo push das alterações...`);
+      logger.info('Fazendo push das alterações');
 
       // Obter a URL remota original do repositório
       const getRemoteCommand = process.platform === 'win32'
@@ -210,35 +199,24 @@ export class RepositoryManager {
       });
 
       const cleanRemoteUrl = remoteUrlOutput.trim();
-      console.log(`📍 URL remota do repositório: ${cleanRemoteUrl}`);
+      logger.info('URL remota do repositório', { url: cleanRemoteUrl });
 
-      // Diagnóstico: branch atual
-      const { stdout: branchOut } = await execAsync(
-        process.platform === 'win32' ? `cd "${repoPath}" && git branch --show-current` : `cd '${repoPath}' && git branch --show-current`,
-        { shell: true, maxBuffer: 10 * 1024 * 1024 }
-      );
-      console.log(`🔍 Branch atual: ${branchOut.trim()}`);
-      const currentBranch = branchOut.trim();
-
-      // Diagnóstico: últimos commits
-      const { stdout: logOut } = await execAsync(
-        process.platform === 'win32' ? `cd "${repoPath}" && git log --oneline -3` : `cd '${repoPath}' && git log --oneline -3`,
-        { shell: true, maxBuffer: 10 * 1024 * 1024 }
-      ).catch(() => ({ stdout: '(sem commits)' }));
-      console.log(`🔍 Últimos commits:\n${logOut}`);
-
-      // Diagnóstico: remotes configurados
-      const { stdout: remoteOut } = await execAsync(
-        process.platform === 'win32' ? `cd "${repoPath}" && git remote -v` : `cd '${repoPath}' && git remote -v`,
-        { shell: true, maxBuffer: 10 * 1024 * 1024 }
-      );
-      console.log(`🔍 Remotes:\n${remoteOut}`);
+      // Branch: use provided branchName or detect current branch
+      let currentBranch = branchName;
+      if (!currentBranch) {
+        const { stdout: branchOut } = await execAsync(
+          process.platform === 'win32' ? `cd "${repoPath}" && git branch --show-current` : `cd '${repoPath}' && git branch --show-current`,
+          { shell: true, maxBuffer: 10 * 1024 * 1024 }
+        );
+        currentBranch = branchOut.trim();
+      }
+      logger.info('Branch para push', { branch: currentBranch });
 
       // Se token foi fornecido, adicionar credenciais à URL (somente se ainda não contiver @)
       let remoteUrl = cleanRemoteUrl;
       if (githubToken && remoteUrl.includes('github.com') && !remoteUrl.includes('@')) {
         remoteUrl = remoteUrl.replace('https://', `https://${githubToken}@`);
-        console.log(`🔐 Usando autenticação com token`);
+        logger.info('Usando autenticação com token para push');
       }
 
       // Construir comando de push usando o branch atual
@@ -246,24 +224,20 @@ export class RepositoryManager {
         ? `cd "${repoPath}" && git push ${remoteUrl} ${currentBranch}`
         : `cd '${repoPath}' && git push ${remoteUrl} ${currentBranch}`;
 
-      const { stdout, stderr } = await execAsync(pushCommand, {
+      await execAsync(pushCommand, {
         shell: true,
         maxBuffer: 10 * 1024 * 1024,
       });
 
-      if (stdout) console.log(`Push stdout: ${stdout}`);
-      if (stderr) console.log(`Push stderr: ${stderr}`);
-
-      console.log(`✅ Push realizado com sucesso`);
+      logger.info('Push realizado com sucesso', { branch: currentBranch });
       return true;
     } catch (error) {
-      console.error(`❌ ERRO COMPLETO: ${JSON.stringify({ message: error.message, stderr: error.stderr, stdout: error.stdout, code: error.code }, null, 2)}`);
       // Se falhar, pode ser porque não há mudanças ou permissão negada
       if (error.message.includes('nothing to push') || error.message.includes('up to date')) {
-        console.log(`ℹ️ Nada para fazer push`);
+        logger.info('Nada para fazer push');
         return true;
       }
-      console.error(`❌ Erro ao fazer push:`, error.message);
+      logger.error('Erro ao fazer push', { error: error.message });
       throw new Error(`Falha ao fazer push: ${error.message}`);
     }
   }
@@ -276,12 +250,12 @@ export class RepositoryManager {
       const workspacePath = path.join(this.baseWorkspacePath, executionId);
       if (fs.existsSync(workspacePath)) {
         fs.rmSync(workspacePath, { recursive: true, force: true });
-        console.log(`✅ Workspace removido: ${executionId}`);
+        logger.info('Workspace removido', { executionId });
         return true;
       }
       return false;
     } catch (error) {
-      console.error(`❌ Erro ao remover workspace:`, error.message);
+      logger.error('Erro ao remover workspace', { error: error.message });
       return false;
     }
   }

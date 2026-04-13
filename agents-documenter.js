@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { OpenAI } from 'openai';
+import { withRetry } from './retry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -56,21 +57,25 @@ ${JSON.stringify(output, null, 2)}
 Gere um documento Markdown profissional e detalhado que explique o que foi executado nesta etapa.
 `;
 
-      const response = await client.chat.completions.create({
-        model: 'gpt-4.1-mini',
-        messages: [
-          {
-            role: 'system',
-            content: systemPrompt
-          },
-          {
-            role: 'user',
-            content: userPrompt
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 2000
-      });
+      const response = await withRetry(
+        () => client.chat.completions.create({
+          model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+          messages: [
+            {
+              role: 'system',
+              content: systemPrompt
+            },
+            {
+              role: 'user',
+              content: userPrompt
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 2000,
+          timeout: 30000
+        }),
+        { label: 'documenterAgent' }
+      );
 
       const documentation = response.choices[0].message.content.trim();
       

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
+import { withRetry } from './retry.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,21 +30,25 @@ export class SpecAgentWithSkill {
     try {
       console.log('📝 Spec Agent: Generating specification...');
       
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4.1-mini',
-        temperature: 0.3,
-        max_tokens: 2500,
-        messages: [
-          {
-            role: 'system',
-            content: `${this.skillContent}\n\nRespond strictly in JSON format as specified in the skill.`
-          },
-          {
-            role: 'user',
-            content: `Create a comprehensive specification for this requirement: ${requirement}`
-          }
-        ]
-      });
+      const response = await withRetry(
+        () => openai.chat.completions.create({
+          model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+          temperature: 0.3,
+          max_tokens: 2500,
+          timeout: 30000,
+          messages: [
+            {
+              role: 'system',
+              content: `${this.skillContent}\n\nRespond strictly in JSON format as specified in the skill.`
+            },
+            {
+              role: 'user',
+              content: `Create a comprehensive specification for this requirement: ${requirement}`
+            }
+          ]
+        }),
+        { label: 'specAgent' }
+      );
 
       const content = response.choices[0].message.content;
       
