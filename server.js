@@ -1,6 +1,8 @@
 import 'dotenv/config.js';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -10,6 +12,7 @@ import { executePipeline, loadExecutionsFromDisk } from './orchestrator.js';
 import { CodePersister } from './code-persister.js';
 import { CodeIntegrator } from './code-integrator.js';
 import dashboardMonitor from './dashboard-monitor.js';
+import logger from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,8 +32,32 @@ const apiKeyMiddleware = (req, res, next) => {
 };
 app.use('/api', apiKeyMiddleware);
 
+app.use(helmet());
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 50,
+  message: { error: 'Too many requests, please try again later.' }
+});
+app.use('/api', limiter);
+
+const pipelineLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: { error: 'Pipeline execution limit reached. Max 10 executions per hour.' }
+});
+app.use('/api/pipeline/execute', pipelineLimiter);
+app.use('/api/pipeline/external', pipelineLimiter);
+
 // Middleware
-app.use(cors());
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3001').split(',');
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -49,7 +76,16 @@ app.post('/api/pipeline/execute', async (req, res) => {
     }
 
     const pipelineExecution = await executePipeline(requirement);
-    
+
+    if (pipelineExecution.status === 'blocked_by_qa') {
+      return res.status(422).json({
+        pipelineId: pipelineExecution.id,
+        status: 'blocked_by_qa',
+        reason: pipelineExecution.stages.qa.gatewayReason,
+        qa: pipelineExecution.stages.qa.result
+      });
+    }
+
     res.json({
       pipelineId: pipelineExecution.id,
       status: pipelineExecution.status,
@@ -57,7 +93,7 @@ app.post('/api/pipeline/execute', async (req, res) => {
       createdAt: pipelineExecution.createdAt
     });
   } catch (error) {
-    console.error('Pipeline execution error:', error);
+    logger.error('Pipeline execution error', { error: error.message, stack: error.stack });
     res.status(500).json({ error: error.message });
   }
 });
@@ -130,7 +166,7 @@ app.post('/api/pipeline/external', async (req, res) => {
     }
 
     const executionId = repositoryManager.generateExecutionId();
-    console.log(`🚀 Iniciando execução: ${executionId}`);
+    logger.info('Iniciando execução', { executionId });
     
     // Clone repository
     const repoPath = await repositoryManager.cloneRepository(repositoryUrl, executionId, githubToken);
@@ -141,65 +177,79 @@ app.post('/api/pipeline/external', async (req, res) => {
     
     // Execute pipeline with repository path (analysis will be done by spec agent)
     const pipelineExecution = await executePipeline(requirement, executionId, repoPath);
-    
+
+    if (pipelineExecution.status === 'blocked_by_qa') {
+      return res.status(422).json({
+        pipelineId: pipelineExecution.id,
+        status: 'blocked_by_qa',
+        reason: pipelineExecution.stages.qa.gatewayReason,
+        qa: pipelineExecution.stages.qa.result
+      });
+    }
+
     // Integrate generated code into repository files
     try {
-      console.log('📝 Integrando código gerado nos arquivos do repositório...');
-      
+      logger.info('Integrando código gerado nos arquivos do repositório');
+
       // Integrar código gerado nos arquivos originais
       if (pipelineExecution.stages.development && pipelineExecution.stages.development.result) {
         const generatedCode = pipelineExecution.stages.development.result;
         const language = generatedCode.language || 'javascript';
-        
+
         // Criar backup dos arquivos originais
         const backup = CodeIntegrator.createBackup(repoPath);
         if (backup.success) {
-          console.log(`💾 Backup criado: ${backup.filesBackedUp} arquivo(s)`);
+          logger.info('Backup criado', { filesBackedUp: backup.filesBackedUp });
         }
-        
+
         // Integrar código nos arquivos principais
         const integration = await CodeIntegrator.integrateIntoRepository(
           repoPath,
           generatedCode,
           language
         );
-        
+
         if (integration.success) {
-          console.log(`✅ ${integration.message}`);
+          logger.info(integration.message);
         } else {
-          console.warn(`⚠️ ${integration.message}`);
+          logger.warn(integration.message);
         }
       }
-      
+
       // Persistir saída completa do pipeline (metadados e documentação)
       await CodePersister.persistPipelineOutput(repoPath, pipelineExecution);
-      
-      console.log('✅ Código integrado e documentação persistida');
+
+      logger.info('Código integrado e documentação persistida');
     } catch (persistError) {
-      console.warn('⚠️ Erro ao integrar código: ' + persistError.message);
+      logger.warn('Erro ao integrar código', { error: persistError.message });
     }
     
     // Auto-commit and push if enabled
     let committed = false;
     let pushed = false;
-    if (autoCommit) {
+    if (autoCommit && githubToken) {
       try {
-        console.log(`📝 Auto-committing changes for ${executionId}...`);
-        const commitMessage = `feat: ${requirement.substring(0, 50)}...`;
+        const branchName = `pipeline/${executionId}`;
+        await repositoryManager.createBranch(repoPath, branchName);
+        const commitMessage = `feat: ${requirement.substring(0, 72)}`;
         await repositoryManager.commitChanges(repoPath, commitMessage);
         committed = true;
-        console.log(`✅ Changes committed`);
+        await repositoryManager.pushChanges(repoPath, githubToken, branchName);
+        pushed = true;
 
-        // Auto-push if token is provided
-        if (githubToken) {
-          console.log(`📤 Auto-pushing changes for ${executionId}...`);
-          await repositoryManager.pushChanges(repoPath, githubToken);
-          pushed = true;
-          console.log(`✅ Changes pushed to GitHub`);
-        }
+        const { createPullRequest } = await import('./github-pr.js');
+        const pr = await createPullRequest({
+          repoUrl: repositoryUrl,
+          githubToken,
+          branchName,
+          baseBranch: process.env.DEFAULT_BASE_BRANCH || 'main',
+          title: `[Pipeline] ${requirement.substring(0, 72)}`,
+          body: `## Pipeline Executor\n\n**Requisito:** ${requirement}\n\n**Pipeline ID:** ${pipelineExecution.id}\n\n**Stages executados:** Spec → Analyst → UX → Developer → QA → DevOps\n\n> Gerado automaticamente pelo Pipeline Executor da Casarcom`
+        });
+
+        pipelineExecution.pullRequest = pr;
       } catch (commitError) {
-        console.warn(`⚠️ Auto-commit/push failed: ${commitError.message}`);
-        // Don't fail the pipeline if commit fails
+        logger.warn('Auto-commit/push failed', { error: commitError.message });
         pipelineExecution.logs.push({
           timestamp: new Date(),
           message: `Auto-commit/push failed: ${commitError.message}`,
@@ -230,7 +280,7 @@ app.post('/api/pipeline/external', async (req, res) => {
       status: 'completed'
     });
   } catch (error) {
-    console.error('Pipeline execution error:', error);
+    logger.error('Pipeline execution error', { error: error.message, stack: error.stack });
     res.status(500).json({ error: error.message });
   }
 });
@@ -322,8 +372,8 @@ app.use('/docs', express.static(path.join(__dirname, 'docs')));
 
 if (process.argv[1] === __filename) {
   app.listen(PORT, () => {
-    console.log(`✅ Pipeline Executor running on port ${PORT}`);
-    console.log(`📊 Dashboard: http://localhost:${PORT}/dashboard.html`);
+    logger.info('Server started', { port: PORT });
+    logger.info('Loading executions from disk');
     loadExecutionsFromDisk();
   });
 }

@@ -3,6 +3,7 @@ import { UIUXAgentWithSkill } from './agents-ux.js';
 import { SpecAgentWithSkill } from './agents-spec.js';
 import DocumenterAgentWithSkill from './agents-documenter.js';
 import { RepositoryAnalyzer } from './repository-analyzer.js';
+import logger from './logger.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -19,7 +20,7 @@ function saveExecutionToDisk(execution) {
     const filePath = path.join(EXECUTIONS_DIR, `${execution.id}.json`);
     fs.writeFileSync(filePath, JSON.stringify(execution, null, 2), 'utf8');
   } catch (err) {
-    console.warn(`⚠️ Failed to save execution to disk: ${err.message}`);
+    logger.warn('Failed to save execution to disk', { error: err.message });
   }
 }
 
@@ -33,12 +34,12 @@ export function loadExecutionsFromDisk() {
         const execution = JSON.parse(raw);
         pipelineExecutions.set(execution.id, execution);
       } catch (parseErr) {
-        console.warn(`⚠️ Could not load execution file ${file}: ${parseErr.message}`);
+        logger.warn('Could not load execution file', { file, error: parseErr.message });
       }
     }
-    console.log(`✅ Loaded ${files.length} execution(s) from disk`);
+    logger.info('Loaded executions from disk', { count: files.length });
   } catch (err) {
-    console.warn(`⚠️ Failed to load executions from disk: ${err.message}`);
+    logger.warn('Failed to load executions from disk', { error: err.message });
   }
 }
 
@@ -55,11 +56,12 @@ export async function executePipeline(requirement, executionId = null, repositor
   };
 
   pipelineExecutions.set(pipelineId, execution);
+  const log = logger.child({ pipelineId, executionId: executionId || 'local' });
   const documenter = new DocumenterAgentWithSkill();
 
   try {
     // Stage 0: Specification (Spec-Driven Development)
-    console.log('\n📝 STAGE 0: SPECIFICATION');
+    log.info('STAGE 0: SPECIFICATION');
     execution.logs.push({ timestamp: new Date(), message: 'Starting specification stage (Spec-Driven Development)...', level: 'info' });
     
     // Analyze repository if provided
@@ -67,20 +69,20 @@ export async function executePipeline(requirement, executionId = null, repositor
     let requirementWithContext = requirement;
     
     if (repositoryPath && fs.existsSync(repositoryPath)) {
-      console.log('🔍 Analisando repositório para extrair contexto...');
+      log.info('Analisando repositório para extrair contexto');
       execution.logs.push({ timestamp: new Date(), message: 'Analyzing repository structure...', level: 'info' });
-      
+
       try {
         repositoryAnalysis = await RepositoryAnalyzer.analyzeRepository(repositoryPath);
         const analysisSummary = RepositoryAnalyzer.generateSummary(repositoryAnalysis);
-        
+
         // Include repository context in the requirement
         requirementWithContext = `${requirement}\n\n## Contexto do Repositório\n${analysisSummary}`;
-        
+
         execution.logs.push({ timestamp: new Date(), message: `Repository analysis completed: ${repositoryAnalysis.endpoints.length} endpoints, ${repositoryAnalysis.functions.length} functions`, level: 'info' });
-        console.log('✅ Repository analysis completed');
+        log.info('Repository analysis completed', { endpoints: repositoryAnalysis.endpoints.length, functions: repositoryAnalysis.functions.length });
       } catch (analysisError) {
-        console.warn(`⚠️ Repository analysis failed: ${analysisError.message}`);
+        log.warn('Repository analysis failed', { error: analysisError.message });
         execution.logs.push({ timestamp: new Date(), message: `Repository analysis failed: ${analysisError.message}`, level: 'warning' });
       }
     }
@@ -95,8 +97,8 @@ export async function executePipeline(requirement, executionId = null, repositor
       duration: `${Date.now() - specStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'Specification created', level: 'success' });
-    console.log('✅ Specification completed');
-    
+    log.info('Specification completed');
+
     // Generate documentation for this stage
     try {
       const docResult = await documenter.generateAndSaveDocumentation({
@@ -107,13 +109,13 @@ export async function executePipeline(requirement, executionId = null, repositor
         output: specification
       });
       execution.documentation.push(docResult);
-      execution.logs.push({ timestamp: new Date(), message: `📚 Documentation generated: ${docResult.relativePath}`, level: 'info' });
+      execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
-      console.warn(`⚠️ Documentation generation failed for specification:`, docError.message);
+      log.warn('Documentation generation failed for specification', { error: docError.message });
     }
 
     // Stage 1: Analysis
-    console.log('\n📊 STAGE 1: ANALYSIS');
+    log.info('STAGE 1: ANALYSIS');
     execution.logs.push({ timestamp: new Date(), message: 'Starting analysis stage...', level: 'info' });
     
     // Pass the specification to the analyst instead of just the raw requirement
@@ -126,8 +128,8 @@ export async function executePipeline(requirement, executionId = null, repositor
       duration: `${Date.now() - analysisStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'Analysis completed', level: 'success' });
-    console.log('✅ Analysis completed:', analysis);
-    
+    log.info('Analysis completed');
+
     // Generate documentation for this stage
     try {
       const docResult = await documenter.generateAndSaveDocumentation({
@@ -138,13 +140,13 @@ export async function executePipeline(requirement, executionId = null, repositor
         output: analysis
       });
       execution.documentation.push(docResult);
-      execution.logs.push({ timestamp: new Date(), message: `📚 Documentation generated: ${docResult.relativePath}`, level: 'info' });
+      execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
-      console.warn(`⚠️ Documentation generation failed for analysis:`, docError.message);
+      log.warn('Documentation generation failed for analysis', { error: docError.message });
     }
 
     // Stage 2: UI/UX Design
-    console.log('\n🎨 STAGE 2: UI/UX DESIGN');
+    log.info('STAGE 2: UI/UX DESIGN');
     execution.logs.push({ timestamp: new Date(), message: 'Starting UI/UX design stage...', level: 'info' });
     
     const uiuxAgent = new UIUXAgentWithSkill();
@@ -158,8 +160,8 @@ export async function executePipeline(requirement, executionId = null, repositor
       duration: `${Date.now() - uxStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'Design specifications created', level: 'success' });
-    console.log('✅ UI/UX Design completed');
-    
+    log.info('UI/UX Design completed');
+
     // Generate documentation for this stage
     try {
       const docResult = await documenter.generateAndSaveDocumentation({
@@ -170,13 +172,13 @@ export async function executePipeline(requirement, executionId = null, repositor
         output: designSpecs
       });
       execution.documentation.push(docResult);
-      execution.logs.push({ timestamp: new Date(), message: `📚 Documentation generated: ${docResult.relativePath}`, level: 'info' });
+      execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
-      console.warn(`⚠️ Documentation generation failed for UI/UX design:`, docError.message);
+      log.warn('Documentation generation failed for UI/UX design', { error: docError.message });
     }
 
     // Stage 3: Development
-    console.log('\n💻 STAGE 3: DEVELOPMENT');
+    log.info('STAGE 3: DEVELOPMENT');
     execution.logs.push({ timestamp: new Date(), message: 'Starting development stage...', level: 'info' });
     
     const devSpecString = JSON.stringify(analysis);
@@ -188,8 +190,8 @@ export async function executePipeline(requirement, executionId = null, repositor
       duration: `${Date.now() - devStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'Code generated', level: 'success' });
-    console.log('✅ Code generated');
-    
+    log.info('Code generated');
+
     // Generate documentation for this stage
     try {
       const docResult = await documenter.generateAndSaveDocumentation({
@@ -200,13 +202,13 @@ export async function executePipeline(requirement, executionId = null, repositor
         output: code
       });
       execution.documentation.push(docResult);
-      execution.logs.push({ timestamp: new Date(), message: `📚 Documentation generated: ${docResult.relativePath}`, level: 'info' });
+      execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
-      console.warn(`⚠️ Documentation generation failed for development:`, docError.message);
+      log.warn('Documentation generation failed for development', { error: docError.message });
     }
 
     // Stage 4: QA
-    console.log('\n🧪 STAGE 4: QA/TESTING');
+    log.info('STAGE 4: QA/TESTING');
     execution.logs.push({ timestamp: new Date(), message: 'Starting QA stage...', level: 'info' });
     
     const codeString = JSON.stringify(code);
@@ -218,8 +220,8 @@ export async function executePipeline(requirement, executionId = null, repositor
       duration: `${Date.now() - qaStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'QA tests completed', level: 'success' });
-    console.log('✅ QA completed:', qaResult);
-    
+    log.info('QA completed');
+
     // Generate documentation for this stage
     try {
       const docResult = await documenter.generateAndSaveDocumentation({
@@ -230,13 +232,40 @@ export async function executePipeline(requirement, executionId = null, repositor
         output: qaResult
       });
       execution.documentation.push(docResult);
-      execution.logs.push({ timestamp: new Date(), message: `📚 Documentation generated: ${docResult.relativePath}`, level: 'info' });
+      execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
-      console.warn(`⚠️ Documentation generation failed for QA:`, docError.message);
+      log.warn('Documentation generation failed for QA', { error: docError.message });
     }
 
+    // QA Gateway — bloqueia avanço se reprovado
+    const qaApproved = qaResult.approved === true;
+    const qaCoverage = qaResult.coverage_percentage || 0;
+    const coverageOk = qaCoverage >= 80;
+    const hasCriticalIssues = (qaResult.issues_found || []).some(issue =>
+      issue.toLowerCase().includes('critical') || issue.toLowerCase().includes('crítico')
+    );
+
+    if (!qaApproved || !coverageOk || hasCriticalIssues) {
+      const reason = [
+        !qaApproved ? 'QA não aprovado pelo agente' : null,
+        !coverageOk ? `Cobertura insuficiente: ${qaCoverage}% (mínimo 80%)` : null,
+        hasCriticalIssues ? 'Issues críticas encontradas pelo QA' : null,
+      ].filter(Boolean).join('; ');
+
+      execution.stages.qa.gatewayStatus = 'blocked';
+      execution.stages.qa.gatewayReason = reason;
+      execution.status = 'blocked_by_qa';
+      execution.logs.push({ timestamp: new Date(), message: `QA Gateway bloqueou: ${reason}`, level: 'warning' });
+      log.warn('QA Gateway blocked pipeline', { reason, coverage: qaCoverage, approved: qaApproved });
+      saveExecutionToDisk(execution);
+      return execution;
+    }
+
+    execution.stages.qa.gatewayStatus = 'approved';
+    log.info('QA Gateway approved', { coverage: qaCoverage });
+
     // Stage 5: DevOps/Deployment
-    console.log('\n🚀 STAGE 5: DEVOPS/DEPLOYMENT');
+    log.info('STAGE 5: DEVOPS/DEPLOYMENT');
     execution.logs.push({ timestamp: new Date(), message: 'Starting deployment stage...', level: 'info' });
     
     const deployStart = Date.now();
@@ -247,8 +276,8 @@ export async function executePipeline(requirement, executionId = null, repositor
       duration: `${Date.now() - deployStart}ms`
     };
     execution.logs.push({ timestamp: new Date(), message: 'Deployment plan created', level: 'success' });
-    console.log('✅ Deployment completed:', deployment);
-    
+    log.info('Deployment completed');
+
     // Generate documentation for this stage
     try {
       const docResult = await documenter.generateAndSaveDocumentation({
@@ -259,31 +288,30 @@ export async function executePipeline(requirement, executionId = null, repositor
         output: deployment
       });
       execution.documentation.push(docResult);
-      execution.logs.push({ timestamp: new Date(), message: `📚 Documentation generated: ${docResult.relativePath}`, level: 'info' });
+      execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
-      console.warn(`⚠️ Documentation generation failed for deployment:`, docError.message);
+      log.warn('Documentation generation failed for deployment', { error: docError.message });
     }
 
     // Generate index document
     try {
       const stages = ['specification', 'analysis', 'ux_design', 'development', 'qa', 'deployment'];
       await documenter.generateIndexDocument(pipelineId, stages);
-      execution.logs.push({ timestamp: new Date(), message: '📚 Documentation index created', level: 'info' });
+      execution.logs.push({ timestamp: new Date(), message: 'Documentation index created', level: 'info' });
     } catch (docError) {
-      console.warn(`⚠️ Index document generation failed:`, docError.message);
+      log.warn('Index document generation failed', { error: docError.message });
     }
 
     // Final status
     execution.status = 'completed';
     execution.completedAt = new Date();
-    execution.logs.push({ 
-      timestamp: new Date(), 
-      message: 'Pipeline execution completed successfully!', 
-      level: 'success' 
+    execution.logs.push({
+      timestamp: new Date(),
+      message: 'Pipeline execution completed successfully!',
+      level: 'success'
     });
 
-    console.log('\n✅ PIPELINE EXECUTION COMPLETED');
-    console.log(`Total time: ${(execution.completedAt - execution.createdAt) / 1000}s`);
+    log.info('PIPELINE EXECUTION COMPLETED', { durationSeconds: (new Date() - execution.createdAt) / 1000 });
 
     saveExecutionToDisk(execution);
     return execution;
@@ -295,7 +323,7 @@ export async function executePipeline(requirement, executionId = null, repositor
       message: `Error: ${error.message}`,
       level: 'error'
     });
-    console.error('❌ Pipeline execution failed:', error.message);
+    log.error('Pipeline execution failed', { error: error.message });
     saveExecutionToDisk(execution);
     throw error;
   }

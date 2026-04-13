@@ -15,7 +15,7 @@ export const documentationConfig = {
     'deployment': { index: 5, name: 'devops', label: '🚀 DevOps' }
   },
   generation: {
-    model: 'gpt-4.1-mini',
+    model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
     temperature: 0.7,
     maxTokens: 2000,
     generateIndex: true,

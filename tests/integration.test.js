@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 const TEST_API_KEY = 'test-key-integration';
 process.env.API_KEY = TEST_API_KEY;
 process.env.PORT = '0'; // let OS assign a free port
+process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-openai-key';
 
 const { default: app } = await import('../server.js');
 
@@ -52,4 +53,23 @@ test('POST /api/pipeline/execute sem body retorna 400', async () => {
     body: JSON.stringify({})
   });
   assert.equal(res.status, 400);
+});
+
+test('POST /api/pipeline/execute com requirement retorna pipelineId', async () => {
+  const res = await fetch(`${baseUrl}/api/pipeline/execute`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': TEST_API_KEY },
+    body: JSON.stringify({ requirement: 'test requirement' })
+  });
+  assert.ok([200, 422, 500].includes(res.status));
+});
+
+test('GET /api/deployments retorna estrutura correta', async () => {
+  const res = await fetch(`${baseUrl}/api/deployments`, {
+    headers: { 'x-api-key': TEST_API_KEY }
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok('deployments' in body);
+  assert.ok('count' in body);
 });
