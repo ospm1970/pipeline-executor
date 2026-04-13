@@ -1,0 +1,55 @@
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+
+const TEST_API_KEY = 'test-key-integration';
+process.env.API_KEY = TEST_API_KEY;
+process.env.PORT = '0'; // let OS assign a free port
+
+const { default: app } = await import('../server.js');
+
+let server;
+let baseUrl;
+
+before(async () => {
+  await new Promise((resolve) => {
+    server = app.listen(0, () => {
+      baseUrl = `http://localhost:${server.address().port}`;
+      resolve();
+    });
+  });
+});
+
+after(async () => {
+  await new Promise((resolve) => server.close(resolve));
+});
+
+test('GET /health retorna status 200 e { status: "healthy" }', async () => {
+  const res = await fetch(`${baseUrl}/health`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.status, 'healthy');
+});
+
+test('GET /api/pipeline sem header x-api-key retorna 401', async () => {
+  const res = await fetch(`${baseUrl}/api/pipeline`);
+  assert.equal(res.status, 401);
+});
+
+test('GET /api/pipeline com x-api-key correto retorna 200', async () => {
+  const res = await fetch(`${baseUrl}/api/pipeline`, {
+    headers: { 'x-api-key': TEST_API_KEY }
+  });
+  assert.equal(res.status, 200);
+});
+
+test('POST /api/pipeline/execute sem body retorna 400', async () => {
+  const res = await fetch(`${baseUrl}/api/pipeline/execute`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': TEST_API_KEY
+    },
+    body: JSON.stringify({})
+  });
+  assert.equal(res.status, 400);
+});

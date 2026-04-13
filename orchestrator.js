@@ -4,9 +4,43 @@ import { SpecAgentWithSkill } from './agents-spec.js';
 import DocumenterAgentWithSkill from './agents-documenter.js';
 import { RepositoryAnalyzer } from './repository-analyzer.js';
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const EXECUTIONS_DIR = path.join(__dirname, 'data', 'executions');
 
 // Store pipeline executions in memory
 const pipelineExecutions = new Map();
+
+function saveExecutionToDisk(execution) {
+  try {
+    fs.mkdirSync(EXECUTIONS_DIR, { recursive: true });
+    const filePath = path.join(EXECUTIONS_DIR, `${execution.id}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(execution, null, 2), 'utf8');
+  } catch (err) {
+    console.warn(`⚠️ Failed to save execution to disk: ${err.message}`);
+  }
+}
+
+export function loadExecutionsFromDisk() {
+  try {
+    if (!fs.existsSync(EXECUTIONS_DIR)) return;
+    const files = fs.readdirSync(EXECUTIONS_DIR).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        const raw = fs.readFileSync(path.join(EXECUTIONS_DIR, file), 'utf8');
+        const execution = JSON.parse(raw);
+        pipelineExecutions.set(execution.id, execution);
+      } catch (parseErr) {
+        console.warn(`⚠️ Could not load execution file ${file}: ${parseErr.message}`);
+      }
+    }
+    console.log(`✅ Loaded ${files.length} execution(s) from disk`);
+  } catch (err) {
+    console.warn(`⚠️ Failed to load executions from disk: ${err.message}`);
+  }
+}
 
 export async function executePipeline(requirement, executionId = null, repositoryPath = null) {
   const pipelineId = `pipeline-${Date.now()}`;
@@ -251,16 +285,18 @@ export async function executePipeline(requirement, executionId = null, repositor
     console.log('\n✅ PIPELINE EXECUTION COMPLETED');
     console.log(`Total time: ${(execution.completedAt - execution.createdAt) / 1000}s`);
 
+    saveExecutionToDisk(execution);
     return execution;
   } catch (error) {
     execution.status = 'failed';
     execution.error = error.message;
-    execution.logs.push({ 
-      timestamp: new Date(), 
-      message: `Error: ${error.message}`, 
-      level: 'error' 
+    execution.logs.push({
+      timestamp: new Date(),
+      message: `Error: ${error.message}`,
+      level: 'error'
     });
     console.error('❌ Pipeline execution failed:', error.message);
+    saveExecutionToDisk(execution);
     throw error;
   }
 }
