@@ -330,8 +330,18 @@
 <body>
   <div class="container">
     <header>
-      <h1>📊 Pipeline Executor - Dashboard</h1>
-      <p>Monitoramento em tempo real de execuções e performance</p>
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:15px;">
+        <div>
+          <h1>📊 Pipeline Executor - Dashboard</h1>
+          <p>Monitoramento em tempo real de execuções e performance</p>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <label for="dashApiKey" style="color:#666; font-size:13px; white-space:nowrap;">API Key:</label>
+          <input type="password" id="dashApiKey" placeholder="sua-api-key"
+            style="padding:8px 12px; border:1px solid #ddd; border-radius:6px; font-size:13px; width:220px;"
+            oninput="API_KEY = this.value; localStorage.setItem('pipeline_api_key', this.value)">
+        </div>
+      </div>
     </header>
 
     <div id="message-container"></div>
@@ -436,11 +446,20 @@
     let distributionChart = null;
     let timelineChart = null;
     let currentFilter = 'all';
+    let API_KEY = localStorage.getItem('pipeline_api_key') || '';
+
+    // Pre-fill input if key is stored
+    document.addEventListener('DOMContentLoaded', () => {
+      const input = document.getElementById('dashApiKey');
+      if (input && API_KEY) input.value = API_KEY;
+    });
+
+    function apiHeaders() { return { 'x-api-key': API_KEY }; }
 
     async function loadDashboard() {
       try {
         // Carregar estatísticas
-        const statsRes = await fetch('/api/dashboard/stats');
+        const statsRes = await fetch('/api/dashboard/stats', { headers: apiHeaders() });
         const stats = await statsRes.json();
 
         document.getElementById('successful-count').textContent = stats.successfulExecutions;
@@ -449,25 +468,25 @@
         document.getElementById('avg-time').textContent = stats.averageExecutionTime;
 
         // Carregar distribuição
-        const distRes = await fetch('/api/dashboard/distribution');
+        const distRes = await fetch('/api/dashboard/distribution', { headers: apiHeaders() });
         const dist = await distRes.json();
 
         updateDistributionChart(dist);
 
         // Carregar timeline
-        const timelineRes = await fetch('/api/dashboard/timeline');
-        const timeline = await timelineRes.json();
+        const timelineRes = await fetch('/api/dashboard/timeline', { headers: apiHeaders() });
+        const timelineData = await timelineRes.json();
 
-        updateTimelineChart(timeline);
+        updateTimelineChart(timelineData.timeline || []);
 
         // Carregar erros
-        const errorsRes = await fetch('/api/dashboard/errors');
+        const errorsRes = await fetch('/api/dashboard/errors', { headers: apiHeaders() });
         const errors = await errorsRes.json();
 
         updateErrorsList(errors);
 
         // Carregar tempo economizado
-        const timeSavedRes = await fetch('/api/dashboard/time-saved');
+        const timeSavedRes = await fetch('/api/dashboard/time-saved', { headers: apiHeaders() });
         const timeSaved = await timeSavedRes.json();
 
         document.getElementById('total-executions').textContent = timeSaved.totalExecutions;
@@ -492,7 +511,7 @@
         if (status) url += `&status=${status}`;
         if (type) url += `&type=${type}`;
 
-        const res = await fetch(url);
+        const res = await fetch(url, { headers: apiHeaders() });
         const data = await res.json();
 
         let html = `
@@ -599,9 +618,9 @@
         timelineChart.destroy();
       }
 
-      const labels = timeline.map(t => t.hour.substring(11, 16));
-      const completed = timeline.map(t => t.completed);
-      const failed = timeline.map(t => t.failed);
+      const labels = timeline.map(t => t.date);
+      const completed = timeline.map(t => t.status === 'completed' ? 1 : 0);
+      const failed = timeline.map(t => (t.status === 'failed' || t.status === 'blocked_by_qa') ? 1 : 0);
 
       timelineChart = new Chart(ctx, {
         type: 'line',

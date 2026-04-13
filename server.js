@@ -364,7 +364,7 @@ app.post('/api/pipeline/external/:executionId/commit', async (req, res) => {
 });
 
 // Dashboard routes
-app.use('/dashboard', dashboardMonitor);
+app.use('/api/dashboard', apiKeyMiddleware, dashboardMonitor);
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));

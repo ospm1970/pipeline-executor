@@ -193,35 +193,21 @@ router.get('/executions/:id', (req, res) => {
   }
 });
 
-// GET /api/dashboard/timeline - Timeline de execuções (últimas 24 horas)
+// GET /api/dashboard/timeline - Timeline das últimas 30 execuções
 router.get('/timeline', (req, res) => {
   try {
     const executions = getAllPipelineExecutions();
-    const now = new Date();
-    const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    
-    const recent = executions.filter(e => new Date(e.createdAt) > twentyFourHoursAgo);
-    
-    // Agrupar por hora
-    const timeline = {};
-    for (let i = 23; i >= 0; i--) {
-      const hour = new Date(now.getTime() - i * 60 * 60 * 1000);
-      const hourKey = hour.toISOString().substring(0, 13) + ':00';
-      timeline[hourKey] = { completed: 0, failed: 0 };
-    }
-    
-    recent.forEach(e => {
-      const hourKey = new Date(e.createdAt).toISOString().substring(0, 13) + ':00';
-      if (timeline[hourKey]) {
-        if (e.status === 'completed') {
-          timeline[hourKey].completed++;
-        } else if (e.status === 'failed') {
-          timeline[hourKey].failed++;
-        }
-      }
-    });
-    
-    res.json(Object.entries(timeline).map(([hour, data]) => ({ hour, ...data })));
+    const timeline = executions
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+      .slice(-30)
+      .map(e => ({
+        date: new Date(e.createdAt).toLocaleDateString('pt-BR'),
+        status: e.status,
+        duration: e.completedAt
+          ? Math.round((new Date(e.completedAt) - new Date(e.createdAt)) / 1000)
+          : null
+      }));
+    res.json({ timeline });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
