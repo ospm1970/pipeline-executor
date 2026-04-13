@@ -6,7 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { RepositoryManager } from './repository-manager.js';
 import { PortManager } from './port-manager.js';
-import { executePipeline } from './orchestrator.js';
+import { executePipeline, loadExecutionsFromDisk } from './orchestrator.js';
 import { CodePersister } from './code-persister.js';
 import { CodeIntegrator } from './code-integrator.js';
 import dashboardMonitor from './dashboard-monitor.js';
@@ -18,6 +18,16 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const repositoryManager = new RepositoryManager('./workspaces');
 const portManager = new PortManager();
+
+// API key authentication middleware
+const apiKeyMiddleware = (req, res, next) => {
+  const key = req.headers['x-api-key'];
+  if (!key || key !== process.env.API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+};
+app.use('/api', apiKeyMiddleware);
 
 // Middleware
 app.use(cors());
@@ -84,7 +94,7 @@ app.get('/api/pipeline', (req, res) => {
     const docsPath = path.join(__dirname, 'docs');
     
     if (!fs.existsSync(docsPath)) {
-      res.json({ count: 0, pipelines: [] });
+      return res.json({ count: 0, pipelines: [] });
     }
     
     const pipelines = fs.readdirSync(docsPath)
@@ -310,8 +320,13 @@ app.use('/dashboard', dashboardMonitor);
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/docs', express.static(path.join(__dirname, 'docs')));
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`✅ Pipeline Executor running on port ${PORT}`);
-  console.log(`📊 Dashboard: http://localhost:${PORT}/dashboard.html`);
-});
+export default app;
+
+// Start server only when run directly
+if (process.argv[1] === __filename) {
+  loadExecutionsFromDisk();
+  app.listen(PORT, () => {
+    console.log(`✅ Pipeline Executor running on port ${PORT}`);
+    console.log(`📊 Dashboard: http://localhost:${PORT}/dashboard.html`);
+  });
+}

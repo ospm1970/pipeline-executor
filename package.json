@@ -9,7 +9,7 @@
     "dev": "node --watch server.js",
     "prod": "node server.js",
     "build": "echo 'No build needed'",
-    "test": "echo 'Tests passing'"
+    "test": "node --test tests/integration.test.js"
   },
   "keywords": [
     "ai",
