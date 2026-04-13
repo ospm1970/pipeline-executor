@@ -302,6 +302,19 @@
       <p class="subtitle">Execute o pipeline sobre seus repositórios e veja as alterações em tempo real</p>
     </header>
 
+    <div class="card" style="margin-bottom: 20px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; cursor:pointer" onclick="toggleConfig()">
+        <h2 style="margin:0">⚙️ Configuração</h2>
+        <span id="configArrow">▼</span>
+      </div>
+      <div id="configPanel" style="display:none; margin-top:15px;">
+        <div class="form-group">
+          <label for="apiKeyInput">API Key (x-api-key):</label>
+          <input type="password" id="apiKeyInput" placeholder="sua-api-key" oninput="API_KEY = this.value">
+        </div>
+      </div>
+    </div>
+
     <div class="tabs">
       <button class="tab-button active" onclick="switchTab('simple')">📝 Pipeline Simples</button>
       <button class="tab-button" onclick="switchTab('external')">🔗 Pipeline Externo</button>
@@ -375,28 +388,29 @@
     let currentPipelineId = null;
     let currentExecutionId = null;
     let monitoringInterval = null;
+    let API_KEY = '';
+
+    function toggleConfig() {
+      const panel = document.getElementById('configPanel');
+      const arrow = document.getElementById('configArrow');
+      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+      arrow.textContent = panel.style.display === 'none' ? '▼' : '▲';
+    }
+
+    function authHeaders(extra = {}) {
+      return { 'Content-Type': 'application/json', 'x-api-key': API_KEY, ...extra };
+    }
 
     function switchTab(tabName) {
-      // Hide all tabs
-      document.querySelectorAll('.tab-content').forEach(tab => {
-        tab.classList.remove('active');
-      });
-      document.querySelectorAll('.tab-button').forEach(btn => {
-        btn.classList.remove('active');
-      });
-
-      // Show selected tab
+      document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+      document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
       document.getElementById(tabName).classList.add('active');
       event.target.classList.add('active');
-
-      if (tabName === 'deployments') {
-        loadDeployments();
-      }
+      if (tabName === 'deployments') loadDeployments();
     }
 
     async function executePipeline() {
       const requirement = document.getElementById('requirement').value.trim();
-      
       if (!requirement) {
         alert('Por favor, descreva a alteração desejada');
         return;
@@ -405,13 +419,21 @@
       try {
         const response = await fetch('/api/pipeline/execute', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify({ requirement })
         });
 
         const data = await response.json();
+
+        if (data.status === 'blocked_by_qa') {
+          document.getElementById('progressContainer').style.display = 'block';
+          document.getElementById('logsContainer').innerHTML =
+            `<div class="log-entry error">🚫 Pipeline bloqueado pelo QA: ${data.reason || ''}</div>`;
+          loadPipelineHistory();
+          return;
+        }
+
         currentPipelineId = data.pipelineId;
-        
         document.getElementById('progressContainer').style.display = 'block';
         monitorPipeline(data.pipelineId);
       } catch (error) {
@@ -432,9 +454,9 @@
       try {
         const response = await fetch('/api/pipeline/external', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            repositoryUrl, 
+          headers: authHeaders(),
+          body: JSON.stringify({
+            repositoryUrl,
             requirement,
             githubToken: githubToken || undefined
           })
@@ -447,10 +469,17 @@
         const statusDiv = document.getElementById('externalStatus');
         statusDiv.innerHTML = `
           <p><strong>Execução ID:</strong> ${data.executionId}</p>
-          <p><strong>Repositório:</strong> ${data.repository.name} (${data.repository.type})</p>
-          <p><strong>Porta Alocada:</strong> <a href="${data.deployment.url}" target="_blank" class="deployment-link">${data.deployment.port}</a></p>
+          <p><strong>Repositório:</strong> ${data.repository?.name} (${data.repository?.type})</p>
+          <p><strong>Porta Alocada:</strong> <a href="${data.deployment?.url}" target="_blank" class="deployment-link">${data.deployment?.port}</a></p>
           <p><strong>Status:</strong> <span class="status-badge running">Processando...</span></p>
         `;
+
+        if (data.pullRequest) {
+          statusDiv.innerHTML += `<p><strong>Pull Request:</strong> <a href="${data.pullRequest.url}" target="_blank" class="deployment-link">#${data.pullRequest.number} — Ver no GitHub</a></p>`;
+        }
+        if (data.status === 'blocked_by_qa') {
+          statusDiv.innerHTML += `<p style="color:#d32f2f"><strong>QA bloqueou:</strong> ${data.reason}</p>`;
+        }
 
         document.getElementById('progressContainer').style.display = 'block';
         monitorPipeline(data.pipelineId);
@@ -462,66 +491,80 @@
     async function monitorPipeline(pipelineId) {
       if (monitoringInterval) clearInterval(monitoringInterval);
 
-      const stages = [
-        { id: 'spec', name: '📝 Especificação', status: 'pending' },
-        { id: 'analysis', name: '📊 Análise', status: 'pending' },
-        { id: 'design', name: '🎨 Design UI/UX', status: 'pending' },
-        { id: 'dev', name: '💻 Desenvolvimento', status: 'pending' },
-        { id: 'qa', name: '🧪 QA/Testes', status: 'pending' },
-        { id: 'devops', name: '🚀 DevOps', status: 'pending' }
-      ];
+      const stageKeys = ['00-especificacao', '01-analise', '02-design-ux', '03-desenvolvimento', '04-qa-testes', '05-devops'];
+      const stageLabels = {
+        '00-especificacao': '📝 Especificação',
+        '01-analise': '📊 Análise',
+        '02-design-ux': '🎨 Design UI/UX',
+        '03-desenvolvimento': '💻 Desenvolvimento',
+        '04-qa-testes': '🧪 QA/Testes',
+        '05-devops': '🚀 DevOps'
+      };
 
       monitoringInterval = setInterval(async () => {
         try {
-          const response = await fetch(`/api/pipeline/${pipelineId}`);
-          const data = await response.json();
-
-          // Update progress
-          let progressHtml = '';
-          stages.forEach((stage, index) => {
-            let status = 'pending';
-            if (data.currentStage > index) status = 'completed';
-            else if (data.currentStage === index) status = 'running';
-
-            progressHtml += `
-              <div class="stage">
-                <div class="stage-status ${status}">${status === 'completed' ? '✓' : status === 'running' ? '⚙' : '○'}</div>
-                <div class="stage-name">${stage.name}</div>
-              </div>
-            `;
+          // Check status via individual pipeline endpoint
+          const detailResponse = await fetch(`/api/pipeline/${pipelineId}`, {
+            headers: { 'x-api-key': API_KEY }
           });
+          const detailData = await detailResponse.json();
 
-          document.getElementById('pipelineProgress').innerHTML = progressHtml;
+          // Check for terminal states
+          if (detailData.status === 'completed' || detailData.status === 'failed' || detailData.status === 'blocked_by_qa') {
+            clearInterval(monitoringInterval);
+            if (detailData.status === 'blocked_by_qa') {
+              document.getElementById('logsContainer').innerHTML +=
+                `<div class="log-entry error">🚫 Pipeline bloqueado pelo QA: ${detailData.reason || ''}</div>`;
+            }
+            loadPipelineHistory();
+          }
 
-          // Update logs
-          if (data.logs && data.logs.length > 0) {
+          // Use listing endpoint to get file-based progress
+          const listResponse = await fetch('/api/pipeline', { headers: { 'x-api-key': API_KEY } });
+          const listData = await listResponse.json();
+          const exec = (listData.pipelines || []).find(p => p.pipelineId === pipelineId);
+
+          if (exec) {
+            let progressHtml = '';
+            stageKeys.forEach(stage => {
+              const done = (exec.files || []).some(f => f.startsWith(stage));
+              progressHtml += `
+                <div class="stage">
+                  <div class="stage-status ${done ? 'completed' : 'pending'}">${done ? '✓' : '○'}</div>
+                  <div class="stage-name">${stageLabels[stage]}</div>
+                </div>
+              `;
+            });
+            document.getElementById('pipelineProgress').innerHTML = progressHtml;
+
+            if (exec.fileCount >= 6) {
+              clearInterval(monitoringInterval);
+              loadPipelineHistory();
+            }
+          }
+
+          // Show documentation files as log
+          if (detailData.documentation && detailData.documentation.length > 0) {
             let logsHtml = '';
-            data.logs.forEach(log => {
-              const type = log.includes('✅') ? 'success' : log.includes('❌') ? 'error' : 'info';
-              logsHtml += `<div class="log-entry ${type}">${escapeHtml(log)}</div>`;
+            detailData.documentation.forEach(doc => {
+              logsHtml += `<div class="log-entry success">📄 ${escapeHtml(doc.filename)}</div>`;
             });
             document.getElementById('logsContainer').innerHTML = logsHtml;
             document.getElementById('logsContainer').scrollTop = document.getElementById('logsContainer').scrollHeight;
           }
-
-          // Check if completed
-          if (data.status === 'completed' || data.status === 'failed') {
-            clearInterval(monitoringInterval);
-            loadPipelineHistory();
-          }
         } catch (error) {
           console.error('Erro ao monitorar pipeline:', error);
         }
-      }, 1000);
+      }, 2000);
     }
 
     async function loadDeployments() {
       try {
-        const response = await fetch('/api/deployments');
+        const response = await fetch('/api/deployments', { headers: { 'x-api-key': API_KEY } });
         const data = await response.json();
 
         let html = '';
-        if (data.deployments.length === 0) {
+        if (!data.deployments || data.deployments.length === 0) {
           html = '<p>Nenhum deployment ativo</p>';
         } else {
           data.deployments.forEach(dep => {
@@ -544,16 +587,16 @@
 
     async function loadPipelineHistory() {
       try {
-        const response = await fetch('/api/pipeline');
-        const data = response.json();
+        const response = await fetch('/api/pipeline', { headers: { 'x-api-key': API_KEY } });
+        const data = await response.json();
 
         let html = '';
-        data.executions.slice(0, 10).forEach(exec => {
+        (data.pipelines || []).slice(0, 10).forEach(exec => {
           html += `
             <div style="padding: 10px; background: #f9f9f9; border-radius: 5px; margin-bottom: 10px;">
-              <strong>${exec.requirement}</strong>
+              <strong>${escapeHtml(exec.pipelineId)}</strong>
               <p style="font-size: 12px; color: #666; margin-top: 5px;">
-                ${new Date(exec.createdAt).toLocaleString('pt-BR')}
+                ${exec.fileCount} arquivo(s) · ${new Date(exec.createdAt).toLocaleString('pt-BR')}
               </p>
             </div>
           `;
