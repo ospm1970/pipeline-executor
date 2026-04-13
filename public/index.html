@@ -503,28 +503,12 @@
 
       monitoringInterval = setInterval(async () => {
         try {
-          // Check status via individual pipeline endpoint
-          const detailResponse = await fetch(`/api/pipeline/${pipelineId}`, {
-            headers: { 'x-api-key': API_KEY }
-          });
-          const detailData = await detailResponse.json();
-
-          // Check for terminal states
-          if (detailData.status === 'completed' || detailData.status === 'failed' || detailData.status === 'blocked_by_qa') {
-            clearInterval(monitoringInterval);
-            if (detailData.status === 'blocked_by_qa') {
-              document.getElementById('logsContainer').innerHTML +=
-                `<div class="log-entry error">🚫 Pipeline bloqueado pelo QA: ${detailData.reason || ''}</div>`;
-            }
-            loadPipelineHistory();
-          }
-
-          // Use listing endpoint to get file-based progress
           const listResponse = await fetch('/api/pipeline', { headers: { 'x-api-key': API_KEY } });
           const listData = await listResponse.json();
           const exec = (listData.pipelines || []).find(p => p.pipelineId === pipelineId);
 
           if (exec) {
+            // Update stage progress based on documentation files present
             let progressHtml = '';
             stageKeys.forEach(stage => {
               const done = (exec.files || []).some(f => f.startsWith(stage));
@@ -537,20 +521,27 @@
             });
             document.getElementById('pipelineProgress').innerHTML = progressHtml;
 
-            if (exec.fileCount >= 6) {
+            // Show files as log
+            if (exec.files && exec.files.length > 0) {
+              let logsHtml = '';
+              exec.files.forEach(f => {
+                logsHtml += `<div class="log-entry success">📄 ${escapeHtml(f)}</div>`;
+              });
+              document.getElementById('logsContainer').innerHTML = logsHtml;
+              document.getElementById('logsContainer').scrollTop = document.getElementById('logsContainer').scrollHeight;
+            }
+
+            // Detect terminal state via status field or file count
+            const terminal = exec.status === 'completed' || exec.status === 'failed' ||
+                             exec.status === 'blocked_by_qa' || exec.fileCount >= 6;
+            if (terminal) {
               clearInterval(monitoringInterval);
+              if (exec.status === 'blocked_by_qa') {
+                document.getElementById('logsContainer').innerHTML +=
+                  `<div class="log-entry error">🚫 Pipeline bloqueado pelo QA</div>`;
+              }
               loadPipelineHistory();
             }
-          }
-
-          // Show documentation files as log
-          if (detailData.documentation && detailData.documentation.length > 0) {
-            let logsHtml = '';
-            detailData.documentation.forEach(doc => {
-              logsHtml += `<div class="log-entry success">📄 ${escapeHtml(doc.filename)}</div>`;
-            });
-            document.getElementById('logsContainer').innerHTML = logsHtml;
-            document.getElementById('logsContainer').scrollTop = document.getElementById('logsContainer').scrollHeight;
           }
         } catch (error) {
           console.error('Erro ao monitorar pipeline:', error);
@@ -594,7 +585,7 @@
         (data.pipelines || []).slice(0, 10).forEach(exec => {
           html += `
             <div style="padding: 10px; background: #f9f9f9; border-radius: 5px; margin-bottom: 10px;">
-              <strong>${escapeHtml(exec.pipelineId)}</strong>
+              <strong>${escapeHtml(exec.requirement || exec.pipelineId)}</strong>
               <p style="font-size: 12px; color: #666; margin-top: 5px;">
                 ${exec.fileCount} arquivo(s) · ${new Date(exec.createdAt).toLocaleString('pt-BR')}
               </p>
