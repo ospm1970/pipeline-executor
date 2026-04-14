@@ -32,7 +32,22 @@ const apiKeyMiddleware = (req, res, next) => {
 };
 app.use('/api', apiKeyMiddleware);
 
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", 'cdn.jsdelivr.net'],
+      scriptSrcAttr: ["'unsafe-inline'"],
+      styleSrc: ["'self'", 'https:', "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:'],
+      fontSrc: ["'self'", 'https:', 'data:'],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'self'"],
+      objectSrc: ["'none'"],
+    }
+  }
+}));
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
