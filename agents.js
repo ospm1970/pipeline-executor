@@ -230,11 +230,10 @@ Original requirement: ${requirement}
 Respond ONLY with the JSON object, nothing else.`;
   
   const response = await withRetry(
-    () => openai.chat.completions.create({
+    (signal) => openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
       temperature: 0.1,
       max_tokens: 2000,
-      timeout: 30000,
       messages: [
         {
           role: 'system',
@@ -247,7 +246,7 @@ CRITICAL: Respond ONLY with valid JSON. No markdown, no explanations, no extra t
           content: correctionPrompt
         }
       ]
-    }),
+    }, { signal }),
     { label: 'autoCorrectJSON' }
   );
   
@@ -263,11 +262,10 @@ export async function analystAgent(requirement) {
     const requiredFields = ['user_stories', 'technical_requirements', 'estimated_effort_hours', 'risks', 'acceptance_criteria'];
     
     const response = await withRetry(
-      () => openai.chat.completions.create({
+      (signal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.3,
         max_tokens: 1500,
-        timeout: 30000,
         messages: [
           {
             role: 'system',
@@ -289,7 +287,7 @@ Respond in JSON format with the following structure:
             content: `Analyze this requirement: ${requirement}`
           }
         ]
-      }),
+      }, { signal }),
       { label: 'analystAgent' }
     );
 
@@ -322,11 +320,10 @@ export async function developerAgent(specification) {
     const requiredFields = ['code', 'language', 'functions', 'dependencies', 'code_quality_score'];
     
     const response = await withRetry(
-      () => openai.chat.completions.create({
+      (signal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.5,
         max_tokens: 2500,
-        timeout: 30000,
         messages: [
           {
             role: 'system',
@@ -348,7 +345,7 @@ Respond in JSON format with the following structure:
             content: `Generate code for this specification: ${specification}`
           }
         ]
-      }),
+      }, { signal }),
       { label: 'developerAgent' }
     );
 
@@ -381,11 +378,10 @@ export async function qaAgent(code) {
     const requiredFields = ['test_cases', 'issues_found', 'coverage_percentage', 'approved', 'recommendations'];
     
     const response = await withRetry(
-      () => openai.chat.completions.create({
+      (signal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.3,
         max_tokens: 1500,
-        timeout: 30000,
         messages: [
           {
             role: 'system',
@@ -407,7 +403,7 @@ Respond in JSON format with the following structure:
             content: `Test and validate this code: ${code}`
           }
         ]
-      }),
+      }, { signal }),
       { label: 'qaAgent' }
     );
 
@@ -440,11 +436,10 @@ export async function devopsAgent(code) {
     const requiredFields = ['deployment_steps', 'environment', 'health_checks', 'rollback_plan', 'estimated_deployment_time_minutes', 'deployment_approved'];
     
     const response = await withRetry(
-      () => openai.chat.completions.create({
+      (signal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.3,
         max_tokens: 1500,
-        timeout: 30000,
         messages: [
           {
             role: 'system',
@@ -467,7 +462,7 @@ Respond in JSON format with the following structure:
             content: `Plan deployment for this code: ${code}`
           }
         ]
-      }),
+      }, { signal }),
       { label: 'devopsAgent' }
     );
 
