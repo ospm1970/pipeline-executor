@@ -58,7 +58,7 @@ Gere um documento Markdown profissional e detalhado que explique o que foi execu
 `;
 
       const response = await withRetry(
-        () => client.chat.completions.create({
+        (signal) => client.chat.completions.create({
           model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
           messages: [
             {
@@ -72,8 +72,7 @@ Gere um documento Markdown profissional e detalhado que explique o que foi execu
           ],
           temperature: 0.7,
           max_tokens: 2000,
-          timeout: 30000
-        }),
+        }, { signal }),
         { label: 'documenterAgent' }
       );
 

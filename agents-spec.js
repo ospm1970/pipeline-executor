@@ -31,11 +31,10 @@ export class SpecAgentWithSkill {
       console.log('📝 Spec Agent: Generating specification...');
       
       const response = await withRetry(
-        () => openai.chat.completions.create({
+        (signal) => openai.chat.completions.create({
           model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
           temperature: 0.3,
           max_tokens: 2500,
-          timeout: 30000,
           messages: [
             {
               role: 'system',
@@ -46,7 +45,7 @@ export class SpecAgentWithSkill {
               content: `Create a comprehensive specification for this requirement: ${requirement}`
             }
           ]
-        }),
+        }, { signal }),
         { label: 'specAgent' }
       );
 

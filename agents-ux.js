@@ -331,7 +331,7 @@ Return as JSON:
 
     try {
       const response = await withRetry(
-        () => openai.chat.completions.create({
+        (signal) => openai.chat.completions.create({
           model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
           messages: [
             {
@@ -345,8 +345,7 @@ Return as JSON:
           ],
           temperature: 0.7,
           max_tokens: 2000,
-          timeout: 30000
-        }),
+        }, { signal }),
         { label: 'uiuxAgent' }
       );
 
