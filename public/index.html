@@ -488,65 +488,64 @@
       }
     }
 
-    async function monitorPipeline(pipelineId) {
-      if (monitoringInterval) clearInterval(monitoringInterval);
+    function monitorPipeline(pipelineId) {
+      if (monitoringInterval) { clearInterval(monitoringInterval); monitoringInterval = null; }
 
-      const stageKeys = ['00-especificacao', '01-analise', '02-design-ux', '03-desenvolvimento', '04-qa-testes', '05-devops'];
-      const stageLabels = {
-        '00-especificacao': '📝 Especificação',
-        '01-analise': '📊 Análise',
-        '02-design-ux': '🎨 Design UI/UX',
-        '03-desenvolvimento': '💻 Desenvolvimento',
-        '04-qa-testes': '🧪 QA/Testes',
-        '05-devops': '🚀 DevOps'
-      };
+      // Stage metadata — ordered by stageIndex
+      const STAGES = [
+        { key: 'specification', label: '📝 Especificação' },
+        { key: 'analysis',      label: '📊 Análise' },
+        { key: 'ux_design',     label: '🎨 Design UI/UX' },
+        { key: 'development',   label: '💻 Desenvolvimento' },
+        { key: 'qa',            label: '🧪 QA/Testes' },
+        { key: 'deployment',    label: '🚀 DevOps' },
+      ];
+      const completed = new Set();
 
-      monitoringInterval = setInterval(async () => {
-        try {
-          const listResponse = await fetch('/api/pipeline', { headers: { 'x-api-key': API_KEY } });
-          const listData = await listResponse.json();
-          const exec = (listData.pipelines || []).find(p => p.pipelineId === pipelineId);
+      function renderStages() {
+        document.getElementById('pipelineProgress').innerHTML = STAGES.map(s => `
+          <div class="stage">
+            <div class="stage-status ${completed.has(s.key) ? 'completed' : 'pending'}">${completed.has(s.key) ? '✓' : '○'}</div>
+            <div class="stage-name">${s.label}</div>
+          </div>`).join('');
+      }
+      renderStages();
 
-          if (exec) {
-            // Update stage progress based on documentation files present
-            let progressHtml = '';
-            stageKeys.forEach(stage => {
-              const done = (exec.files || []).some(f => f.startsWith(stage));
-              progressHtml += `
-                <div class="stage">
-                  <div class="stage-status ${done ? 'completed' : 'pending'}">${done ? '✓' : '○'}</div>
-                  <div class="stage-name">${stageLabels[stage]}</div>
-                </div>
-              `;
-            });
-            document.getElementById('pipelineProgress').innerHTML = progressHtml;
+      const evtSource = new EventSource(
+        `/api/pipeline/${pipelineId}/stream?api_key=${encodeURIComponent(API_KEY)}`
+      );
 
-            // Show files as log
-            if (exec.files && exec.files.length > 0) {
-              let logsHtml = '';
-              exec.files.forEach(f => {
-                logsHtml += `<div class="log-entry success">📄 ${escapeHtml(f)}</div>`;
-              });
-              document.getElementById('logsContainer').innerHTML = logsHtml;
-              document.getElementById('logsContainer').scrollTop = document.getElementById('logsContainer').scrollHeight;
-            }
+      evtSource.addEventListener('progress', (e) => {
+        const data = JSON.parse(e.data);
+        completed.add(data.stage);
+        renderStages();
+        const label = STAGES.find(s => s.key === data.stage)?.label || data.stage;
+        const logs = document.getElementById('logsContainer');
+        logs.innerHTML += `<div class="log-entry success">✅ ${label} — ${data.duration}</div>`;
+        logs.scrollTop = logs.scrollHeight;
+      });
 
-            // Detect terminal state via status field or file count
-            const terminal = exec.status === 'completed' || exec.status === 'failed' ||
-                             exec.status === 'blocked_by_qa' || exec.fileCount >= 6;
-            if (terminal) {
-              clearInterval(monitoringInterval);
-              if (exec.status === 'blocked_by_qa') {
-                document.getElementById('logsContainer').innerHTML +=
-                  `<div class="log-entry error">🚫 Pipeline bloqueado pelo QA</div>`;
-              }
-              loadPipelineHistory();
-            }
-          }
-        } catch (error) {
-          console.error('Erro ao monitorar pipeline:', error);
+      evtSource.addEventListener('done', () => {
+        evtSource.close();
+        loadPipelineHistory();
+      });
+
+      evtSource.addEventListener('blocked_by_qa', (e) => {
+        const data = JSON.parse(e.data);
+        evtSource.close();
+        document.getElementById('logsContainer').innerHTML +=
+          `<div class="log-entry error">🚫 Pipeline bloqueado pelo QA: ${escapeHtml(data.reason || '')}</div>`;
+        loadPipelineHistory();
+      });
+
+      evtSource.addEventListener('error', (e) => {
+        if (e.data) {
+          const data = JSON.parse(e.data);
+          evtSource.close();
+          document.getElementById('logsContainer').innerHTML +=
+            `<div class="log-entry error">❌ Erro: ${escapeHtml(data.message || 'Erro desconhecido')}</div>`;
         }
-      }, 2000);
+      });
     }
 
     async function loadDeployments() {

@@ -1,5 +1,11 @@
 import OpenAI from 'openai';
 import { withRetry } from './retry.js';
+import logger from './logger.js';
+
+function logTokens(agent, usage) {
+  if (!usage) return;
+  logger.info('Token usage', { agent, prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, total_tokens: usage.total_tokens });
+}
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -249,7 +255,7 @@ CRITICAL: Respond ONLY with valid JSON. No markdown, no explanations, no extra t
     }, { signal }),
     { label: 'autoCorrectJSON' }
   );
-  
+  logTokens('autoCorrectJSON', response.usage);
   const content = response.choices[0].message.content;
   return extractJSON(content);
 }
@@ -290,7 +296,7 @@ Respond in JSON format with the following structure:
       }, { signal }),
       { label: 'analystAgent' }
     );
-
+    logTokens('analystAgent', response.usage);
     let analysis = extractJSON(response.choices[0].message.content);
     
     // Validar JSON
@@ -348,7 +354,7 @@ Respond in JSON format with the following structure:
       }, { signal }),
       { label: 'developerAgent' }
     );
-
+    logTokens('developerAgent', response.usage);
     let code = extractJSON(response.choices[0].message.content);
     
     // Validar JSON
@@ -406,7 +412,7 @@ Respond in JSON format with the following structure:
       }, { signal }),
       { label: 'qaAgent' }
     );
-
+    logTokens('qaAgent', response.usage);
     let testResult = extractJSON(response.choices[0].message.content);
     
     // Validar JSON
@@ -465,7 +471,7 @@ Respond in JSON format with the following structure:
       }, { signal }),
       { label: 'devopsAgent' }
     );
-
+    logTokens('devopsAgent', response.usage);
     let deployment = extractJSON(response.choices[0].message.content);
     
     // Validar JSON

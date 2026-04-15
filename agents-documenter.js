@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { OpenAI } from 'openai';
 import { withRetry } from './retry.js';
+import logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,6 +77,7 @@ Gere um documento Markdown profissional e detalhado que explique o que foi execu
         { label: 'documenterAgent' }
       );
 
+      logger.info('Token usage', { agent: 'documenterAgent', prompt_tokens: response.usage?.prompt_tokens, completion_tokens: response.usage?.completion_tokens, total_tokens: response.usage?.total_tokens });
       const documentation = response.choices[0].message.content.trim();
       
       // Remover delimitadores de markdown se presentes

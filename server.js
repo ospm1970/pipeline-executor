@@ -8,7 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { RepositoryManager } from './repository-manager.js';
 import { PortManager } from './port-manager.js';
-import { executePipeline, loadExecutionsFromDisk } from './orchestrator.js';
+import { executePipeline, loadExecutionsFromDisk, startPipeline, pipelineEmitters } from './orchestrator.js';
 import { CodePersister } from './code-persister.js';
 import { CodeIntegrator } from './code-integrator.js';
 import dashboardMonitor from './dashboard-monitor.js';
@@ -24,7 +24,8 @@ const portManager = new PortManager();
 
 // API key authentication middleware
 const apiKeyMiddleware = (req, res, next) => {
-  const key = req.headers['x-api-key'];
+  // Accept key from header (regular requests) or query param (EventSource/SSE)
+  const key = req.headers['x-api-key'] || req.query.api_key;
   if (!key || key !== process.env.API_KEY) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -81,36 +82,66 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// Execute pipeline on requirement
-app.post('/api/pipeline/execute', async (req, res) => {
+// Execute pipeline on requirement — starts async, returns pipelineId immediately.
+// Progress is streamed via GET /api/pipeline/:pipelineId/stream (SSE).
+app.post('/api/pipeline/execute', (req, res) => {
   try {
     const { requirement } = req.body;
-    
     if (!requirement) {
       return res.status(400).json({ error: 'Requirement is required' });
     }
-
-    const pipelineExecution = await executePipeline(requirement);
-
-    if (pipelineExecution.status === 'blocked_by_qa') {
-      return res.status(422).json({
-        pipelineId: pipelineExecution.id,
-        status: 'blocked_by_qa',
-        reason: pipelineExecution.stages.qa.gatewayReason,
-        qa: pipelineExecution.stages.qa.result
-      });
-    }
-
-    res.json({
-      pipelineId: pipelineExecution.id,
-      status: pipelineExecution.status,
-      requirement,
-      createdAt: pipelineExecution.createdAt
-    });
+    const pipelineId = startPipeline(requirement);
+    res.json({ pipelineId, status: 'running', requirement, createdAt: new Date() });
   } catch (error) {
-    logger.error('Pipeline execution error', { error: error.message, stack: error.stack });
+    logger.error('Pipeline start error', { error: error.message, stack: error.stack });
     res.status(500).json({ error: error.message });
   }
+});
+
+// SSE stream — push pipeline progress to the browser in real time.
+// EventSource can't set custom headers, so auth uses ?api_key= query param.
+app.get('/api/pipeline/:pipelineId/stream', (req, res) => {
+  const { pipelineId } = req.params;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  // Keep-alive ping every 20 s so proxies don't close idle connections
+  const heartbeat = setInterval(() => res.write(':ping\n\n'), 20_000);
+
+  const emitter = pipelineEmitters.get(pipelineId);
+  if (!emitter) {
+    // Pipeline already finished or unknown — client can fall back to REST
+    clearInterval(heartbeat);
+    send('done', { pipelineId, status: 'completed' });
+    return res.end();
+  }
+
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    emitter.off('progress', onProgress);
+    emitter.off('done', onDone);
+    emitter.off('blocked_by_qa', onBlocked);
+    emitter.off('error', onError);
+  };
+
+  const onProgress    = (data) => send('progress', data);
+  const onDone        = (data) => { cleanup(); send('done', data); res.end(); };
+  const onBlocked     = (data) => { cleanup(); send('blocked_by_qa', data); res.end(); };
+  const onError       = (data) => { cleanup(); send('error', data); res.end(); };
+
+  emitter.on('progress',     onProgress);
+  emitter.on('done',         onDone);
+  emitter.on('blocked_by_qa', onBlocked);
+  emitter.on('error',        onError);
+
+  req.on('close', cleanup);
 });
 
 // Get pipeline execution
@@ -275,7 +306,7 @@ app.post('/api/pipeline/external', async (req, res) => {
 
     res.json({
       executionId,
-      pipelineId: pipelineExecution.pipelineId,
+      pipelineId: pipelineExecution.id,
       repository: {
         url: repositoryUrl,
         name: repoInfo.name,

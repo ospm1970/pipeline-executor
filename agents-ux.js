@@ -8,6 +8,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
 import { withRetry } from './retry.js';
+import logger from './logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -349,6 +350,7 @@ Return as JSON:
         { label: 'uiuxAgent' }
       );
 
+      logger.info('Token usage', { agent: 'uiuxAgent', prompt_tokens: response.usage?.prompt_tokens, completion_tokens: response.usage?.completion_tokens, total_tokens: response.usage?.total_tokens });
       return response.choices[0].message.content;
     } catch (error) {
       throw new Error(`LLM API error: ${error.message}`);

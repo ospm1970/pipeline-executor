@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
 import { withRetry } from './retry.js';
+import logger from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,6 +50,7 @@ export class SpecAgentWithSkill {
         { label: 'specAgent' }
       );
 
+      logger.info('Token usage', { agent: 'specAgent', prompt_tokens: response.usage?.prompt_tokens, completion_tokens: response.usage?.completion_tokens, total_tokens: response.usage?.total_tokens });
       const content = response.choices[0].message.content;
       
       // Extract JSON from content
