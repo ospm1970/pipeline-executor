@@ -7,12 +7,16 @@ import logger from './logger.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { EventEmitter } from 'events';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXECUTIONS_DIR = path.join(__dirname, 'data', 'executions');
 
 // Store pipeline executions in memory
 const pipelineExecutions = new Map();
+
+// Active pipeline emitters — used by SSE endpoint
+export const pipelineEmitters = new Map();
 
 function saveExecutionToDisk(execution) {
   try {
@@ -43,8 +47,10 @@ export function loadExecutionsFromDisk() {
   }
 }
 
-export async function executePipeline(requirement, executionId = null, repositoryPath = null) {
-  const pipelineId = `pipeline-${Date.now()}`;
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal pipeline runner — shared by both exported entry points
+// ─────────────────────────────────────────────────────────────────────────────
+async function runPipeline(pipelineId, requirement, executionId, repositoryPath, emitter) {
   const execution = {
     id: pipelineId,
     requirement,
@@ -60,25 +66,20 @@ export async function executePipeline(requirement, executionId = null, repositor
   const documenter = new DocumenterAgentWithSkill();
 
   try {
-    // Stage 0: Specification (Spec-Driven Development)
+    // ── Stage 0: Specification ──────────────────────────────────────────────
     log.info('STAGE 0: SPECIFICATION');
     execution.logs.push({ timestamp: new Date(), message: 'Starting specification stage (Spec-Driven Development)...', level: 'info' });
-    
-    // Analyze repository if provided
+
     let repositoryAnalysis = null;
     let requirementWithContext = requirement;
-    
+
     if (repositoryPath && fs.existsSync(repositoryPath)) {
       log.info('Analisando repositório para extrair contexto');
       execution.logs.push({ timestamp: new Date(), message: 'Analyzing repository structure...', level: 'info' });
-
       try {
         repositoryAnalysis = await RepositoryAnalyzer.analyzeRepository(repositoryPath);
         const analysisSummary = RepositoryAnalyzer.generateSummary(repositoryAnalysis);
-
-        // Include repository context in the requirement
         requirementWithContext = `${requirement}\n\n## Contexto do Repositório\n${analysisSummary}`;
-
         execution.logs.push({ timestamp: new Date(), message: `Repository analysis completed: ${repositoryAnalysis.endpoints.length} endpoints, ${repositoryAnalysis.functions.length} functions`, level: 'info' });
         log.info('Repository analysis completed', { endpoints: repositoryAnalysis.endpoints.length, functions: repositoryAnalysis.functions.length });
       } catch (analysisError) {
@@ -86,158 +87,111 @@ export async function executePipeline(requirement, executionId = null, repositor
         execution.logs.push({ timestamp: new Date(), message: `Repository analysis failed: ${analysisError.message}`, level: 'warning' });
       }
     }
-    
+
     const specAgent = new SpecAgentWithSkill();
     const specStart = Date.now();
     const specification = await specAgent.generateSpecification(requirementWithContext);
+    const specDuration = `${Date.now() - specStart}ms`;
 
-    execution.stages.specification = {
-      status: 'completed',
-      result: specification,
-      duration: `${Date.now() - specStart}ms`
-    };
+    execution.stages.specification = { status: 'completed', result: specification, duration: specDuration };
     execution.logs.push({ timestamp: new Date(), message: 'Specification created', level: 'success' });
-    log.info('Specification completed');
+    log.info('Specification completed', { duration: specDuration });
+    emitter?.emit('progress', { stage: 'specification', stageIndex: 0, status: 'completed', duration: specDuration });
 
-    // Generate documentation for this stage
     try {
-      const docResult = await documenter.generateAndSaveDocumentation({
-        pipelineId,
-        stage: 'specification',
-        requirement,
-        input: { requirement },
-        output: specification
-      });
+      const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'specification', requirement, input: { requirement }, output: specification });
       execution.documentation.push(docResult);
       execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
       log.warn('Documentation generation failed for specification', { error: docError.message });
     }
 
-    // Stage 1: Analysis
+    // ── Stage 1: Analysis ───────────────────────────────────────────────────
     log.info('STAGE 1: ANALYSIS');
     execution.logs.push({ timestamp: new Date(), message: 'Starting analysis stage...', level: 'info' });
-    
-    // Pass the specification to the analyst instead of just the raw requirement
-    const specString = JSON.stringify(specification);
-    const analysisStart = Date.now();
-    const analysis = await analystAgent(`Based on this specification, generate user stories and technical requirements:\n${specString}`);
-    execution.stages.analysis = {
-      status: 'completed',
-      result: analysis,
-      duration: `${Date.now() - analysisStart}ms`
-    };
-    execution.logs.push({ timestamp: new Date(), message: 'Analysis completed', level: 'success' });
-    log.info('Analysis completed');
 
-    // Generate documentation for this stage
+    const analysisStart = Date.now();
+    const analysis = await analystAgent(`Based on this specification, generate user stories and technical requirements:\n${JSON.stringify(specification)}`);
+    const analysisDuration = `${Date.now() - analysisStart}ms`;
+
+    execution.stages.analysis = { status: 'completed', result: analysis, duration: analysisDuration };
+    execution.logs.push({ timestamp: new Date(), message: 'Analysis completed', level: 'success' });
+    log.info('Analysis completed', { duration: analysisDuration });
+    emitter?.emit('progress', { stage: 'analysis', stageIndex: 1, status: 'completed', duration: analysisDuration });
+
     try {
-      const docResult = await documenter.generateAndSaveDocumentation({
-        pipelineId,
-        stage: 'analysis',
-        requirement,
-        input: specification,
-        output: analysis
-      });
+      const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'analysis', requirement, input: specification, output: analysis });
       execution.documentation.push(docResult);
       execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
       log.warn('Documentation generation failed for analysis', { error: docError.message });
     }
 
-    // Stage 2: UI/UX Design
+    // ── Stage 2: UI/UX Design ───────────────────────────────────────────────
     log.info('STAGE 2: UI/UX DESIGN');
     execution.logs.push({ timestamp: new Date(), message: 'Starting UI/UX design stage...', level: 'info' });
-    
-    const uiuxAgent = new UIUXAgentWithSkill();
-    const userStories = analysis.user_stories || [];
-    const requirements = analysis.technical_requirements || [];
-    const uxStart = Date.now();
-    const designSpecs = await uiuxAgent.applySkillToDesign(userStories, requirements);
-    execution.stages.ux_design = {
-      status: 'completed',
-      result: designSpecs,
-      duration: `${Date.now() - uxStart}ms`
-    };
-    execution.logs.push({ timestamp: new Date(), message: 'Design specifications created', level: 'success' });
-    log.info('UI/UX Design completed');
 
-    // Generate documentation for this stage
+    const uiuxAgent = new UIUXAgentWithSkill();
+    const uxStart = Date.now();
+    const designSpecs = await uiuxAgent.applySkillToDesign(analysis.user_stories || [], analysis.technical_requirements || []);
+    const uxDuration = `${Date.now() - uxStart}ms`;
+
+    execution.stages.ux_design = { status: 'completed', result: designSpecs, duration: uxDuration };
+    execution.logs.push({ timestamp: new Date(), message: 'Design specifications created', level: 'success' });
+    log.info('UI/UX Design completed', { duration: uxDuration });
+    emitter?.emit('progress', { stage: 'ux_design', stageIndex: 2, status: 'completed', duration: uxDuration });
+
     try {
-      const docResult = await documenter.generateAndSaveDocumentation({
-        pipelineId,
-        stage: 'ux_design',
-        requirement,
-        input: analysis,
-        output: designSpecs
-      });
+      const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'ux_design', requirement, input: analysis, output: designSpecs });
       execution.documentation.push(docResult);
       execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
       log.warn('Documentation generation failed for UI/UX design', { error: docError.message });
     }
 
-    // Stage 3: Development
+    // ── Stage 3: Development ────────────────────────────────────────────────
     log.info('STAGE 3: DEVELOPMENT');
     execution.logs.push({ timestamp: new Date(), message: 'Starting development stage...', level: 'info' });
-    
-    const devSpecString = JSON.stringify(analysis);
-    const devStart = Date.now();
-    const code = await developerAgent(devSpecString);
-    execution.stages.development = {
-      status: 'completed',
-      result: code,
-      duration: `${Date.now() - devStart}ms`
-    };
-    execution.logs.push({ timestamp: new Date(), message: 'Code generated', level: 'success' });
-    log.info('Code generated');
 
-    // Generate documentation for this stage
+    const devStart = Date.now();
+    const code = await developerAgent(JSON.stringify(analysis));
+    const devDuration = `${Date.now() - devStart}ms`;
+
+    execution.stages.development = { status: 'completed', result: code, duration: devDuration };
+    execution.logs.push({ timestamp: new Date(), message: 'Code generated', level: 'success' });
+    log.info('Code generated', { duration: devDuration });
+    emitter?.emit('progress', { stage: 'development', stageIndex: 3, status: 'completed', duration: devDuration });
+
     try {
-      const docResult = await documenter.generateAndSaveDocumentation({
-        pipelineId,
-        stage: 'development',
-        requirement,
-        input: analysis,
-        output: code
-      });
+      const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'development', requirement, input: analysis, output: code });
       execution.documentation.push(docResult);
       execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
       log.warn('Documentation generation failed for development', { error: docError.message });
     }
 
-    // Stage 4: QA
+    // ── Stage 4: QA ─────────────────────────────────────────────────────────
     log.info('STAGE 4: QA/TESTING');
     execution.logs.push({ timestamp: new Date(), message: 'Starting QA stage...', level: 'info' });
-    
-    const codeString = JSON.stringify(code);
-    const qaStart = Date.now();
-    const qaResult = await qaAgent(codeString);
-    execution.stages.qa = {
-      status: 'completed',
-      result: qaResult,
-      duration: `${Date.now() - qaStart}ms`
-    };
-    execution.logs.push({ timestamp: new Date(), message: 'QA tests completed', level: 'success' });
-    log.info('QA completed');
 
-    // Generate documentation for this stage
+    const qaStart = Date.now();
+    const qaResult = await qaAgent(JSON.stringify(code));
+    const qaDuration = `${Date.now() - qaStart}ms`;
+
+    execution.stages.qa = { status: 'completed', result: qaResult, duration: qaDuration };
+    execution.logs.push({ timestamp: new Date(), message: 'QA tests completed', level: 'success' });
+    log.info('QA completed', { duration: qaDuration });
+    emitter?.emit('progress', { stage: 'qa', stageIndex: 4, status: 'completed', duration: qaDuration });
+
     try {
-      const docResult = await documenter.generateAndSaveDocumentation({
-        pipelineId,
-        stage: 'qa',
-        requirement,
-        input: code,
-        output: qaResult
-      });
+      const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'qa', requirement, input: code, output: qaResult });
       execution.documentation.push(docResult);
       execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
       log.warn('Documentation generation failed for QA', { error: docError.message });
     }
 
-    // QA Gateway — bloqueia avanço se reprovado
+    // ── QA Gateway ──────────────────────────────────────────────────────────
     const qaApproved = qaResult.approved === true;
     const qaCoverage = qaResult.coverage_percentage || 0;
     const coverageOk = qaCoverage >= 80;
@@ -257,6 +211,7 @@ export async function executePipeline(requirement, executionId = null, repositor
       execution.status = 'blocked_by_qa';
       execution.logs.push({ timestamp: new Date(), message: `QA Gateway bloqueou: ${reason}`, level: 'warning' });
       log.warn('QA Gateway blocked pipeline', { reason, coverage: qaCoverage, approved: qaApproved });
+      emitter?.emit('blocked_by_qa', { reason, coverage: qaCoverage, pipelineId });
       saveExecutionToDisk(execution);
       return execution;
     }
@@ -264,68 +219,86 @@ export async function executePipeline(requirement, executionId = null, repositor
     execution.stages.qa.gatewayStatus = 'approved';
     log.info('QA Gateway approved', { coverage: qaCoverage });
 
-    // Stage 5: DevOps/Deployment
+    // ── Stage 5: DevOps/Deployment ──────────────────────────────────────────
     log.info('STAGE 5: DEVOPS/DEPLOYMENT');
     execution.logs.push({ timestamp: new Date(), message: 'Starting deployment stage...', level: 'info' });
-    
-    const deployStart = Date.now();
-    const deployment = await devopsAgent(codeString);
-    execution.stages.deployment = {
-      status: 'completed',
-      result: deployment,
-      duration: `${Date.now() - deployStart}ms`
-    };
-    execution.logs.push({ timestamp: new Date(), message: 'Deployment plan created', level: 'success' });
-    log.info('Deployment completed');
 
-    // Generate documentation for this stage
+    const deployStart = Date.now();
+    const deployment = await devopsAgent(JSON.stringify(code));
+    const deployDuration = `${Date.now() - deployStart}ms`;
+
+    execution.stages.deployment = { status: 'completed', result: deployment, duration: deployDuration };
+    execution.logs.push({ timestamp: new Date(), message: 'Deployment plan created', level: 'success' });
+    log.info('Deployment completed', { duration: deployDuration });
+    emitter?.emit('progress', { stage: 'deployment', stageIndex: 5, status: 'completed', duration: deployDuration });
+
     try {
-      const docResult = await documenter.generateAndSaveDocumentation({
-        pipelineId,
-        stage: 'deployment',
-        requirement,
-        input: code,
-        output: deployment
-      });
+      const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'deployment', requirement, input: code, output: deployment });
       execution.documentation.push(docResult);
       execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
       log.warn('Documentation generation failed for deployment', { error: docError.message });
     }
 
-    // Generate index document
+    // ── Index document ──────────────────────────────────────────────────────
     try {
-      const stages = ['specification', 'analysis', 'ux_design', 'development', 'qa', 'deployment'];
-      await documenter.generateIndexDocument(pipelineId, stages);
+      await documenter.generateIndexDocument(pipelineId, ['specification', 'analysis', 'ux_design', 'development', 'qa', 'deployment']);
       execution.logs.push({ timestamp: new Date(), message: 'Documentation index created', level: 'info' });
     } catch (docError) {
       log.warn('Index document generation failed', { error: docError.message });
     }
 
-    // Final status
+    // ── Done ────────────────────────────────────────────────────────────────
     execution.status = 'completed';
     execution.completedAt = new Date();
-    execution.logs.push({
-      timestamp: new Date(),
-      message: 'Pipeline execution completed successfully!',
-      level: 'success'
-    });
+    const totalSeconds = ((execution.completedAt - execution.createdAt) / 1000).toFixed(1);
+    execution.logs.push({ timestamp: new Date(), message: 'Pipeline execution completed successfully!', level: 'success' });
+    log.info('PIPELINE EXECUTION COMPLETED', { durationSeconds: totalSeconds });
 
-    log.info('PIPELINE EXECUTION COMPLETED', { durationSeconds: (new Date() - execution.createdAt) / 1000 });
-
+    emitter?.emit('done', { pipelineId, status: 'completed', durationSeconds: totalSeconds });
     saveExecutionToDisk(execution);
     return execution;
+
   } catch (error) {
     execution.status = 'failed';
     execution.error = error.message;
-    execution.logs.push({
-      timestamp: new Date(),
-      message: `Error: ${error.message}`,
-      level: 'error'
-    });
+    execution.logs.push({ timestamp: new Date(), message: `Error: ${error.message}`, level: 'error' });
     log.error('Pipeline execution failed', { error: error.message });
+    emitter?.emit('error', { message: error.message, pipelineId });
     saveExecutionToDisk(execution);
     throw error;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// startPipeline — non-blocking, returns pipelineId immediately.
+// Used by POST /api/pipeline/execute so the response comes back right away
+// and the frontend connects to the SSE stream.
+// ─────────────────────────────────────────────────────────────────────────────
+export function startPipeline(requirement, executionId = null, repositoryPath = null) {
+  const pipelineId = `pipeline-${Date.now()}`;
+  const emitter = new EventEmitter();
+  pipelineEmitters.set(pipelineId, emitter);
+
+  runPipeline(pipelineId, requirement, executionId, repositoryPath, emitter)
+    .catch(err => logger.error('Background pipeline error', { pipelineId, error: err.message }))
+    .finally(() => setTimeout(() => pipelineEmitters.delete(pipelineId), 30_000));
+
+  return pipelineId;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// executePipeline — blocking await, kept for the external-repo endpoint
+// which needs the result before sending the HTTP response.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function executePipeline(requirement, executionId = null, repositoryPath = null) {
+  const pipelineId = `pipeline-${Date.now()}`;
+  const emitter = new EventEmitter();
+  pipelineEmitters.set(pipelineId, emitter);
+  try {
+    return await runPipeline(pipelineId, requirement, executionId, repositoryPath, emitter);
+  } finally {
+    setTimeout(() => pipelineEmitters.delete(pipelineId), 30_000);
   }
 }
 
@@ -339,6 +312,7 @@ export function getAllPipelineExecutions() {
 
 export default {
   executePipeline,
+  startPipeline,
   getPipelineExecution,
   getAllPipelineExecutions
 };
