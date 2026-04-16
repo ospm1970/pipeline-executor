@@ -304,7 +304,7 @@
 
     <div class="card" style="margin-bottom: 20px;">
       <div style="display:flex; align-items:center; justify-content:space-between; cursor:pointer" onclick="toggleConfig()">
-        <h2 style="margin:0">⚙️ Configuração</h2>
+        <h2 style="margin:0; width:100%; cursor:pointer">⚙️ Configuração</h2>
         <span id="configArrow">▼</span>
       </div>
       <div id="configPanel" style="display:none; margin-top:15px;">
@@ -393,8 +393,9 @@
     function toggleConfig() {
       const panel = document.getElementById('configPanel');
       const arrow = document.getElementById('configArrow');
-      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-      arrow.textContent = panel.style.display === 'none' ? '▼' : '▲';
+      const isHidden = panel.style.display === 'none' || panel.style.display === '';
+      panel.style.display = isHidden ? 'block' : 'none';
+      arrow.textContent = isHidden ? '▲' : '▼';
     }
 
     function authHeaders(extra = {}) {
