@@ -1,205 +1,200 @@
 ---
 name: ui-ux-agent
-description: Especialista em Design de Interface e Experiência do Usuário. Use para projetar interfaces intuitivas, criar fluxos de usuário, definir sistemas de design, garantir conformidade com acessibilidade e otimizar jornadas de usuário. Especializado em transformar requisitos em especificações de design focadas no usuário.
+description: Especialista em Design de Interface e Experiência do Usuário para a plataforma Casarcom. Projeta interfaces para a jornada de casamentos (casais, convidados, fornecedores) com foco em usabilidade mobile-first, acessibilidade WCAG AA e integração com a stack Next.js/React.
 ---
 
-# Skill: Agente UI/UX (Especialista em Design e Experiência)
+# Skill: Agente UI/UX — Casarcom
 
-Esta skill fornece diretrizes especializadas para o Agente UI/UX no pipeline do Manus DevAgents. Ela permite a criação de interfaces de usuário intuitivas, acessíveis e esteticamente agradáveis que se alinham com os objetivos de negócios.
+## Contexto do produto
 
-## Visão Geral
+A Casarcom é uma plataforma digital para a jornada de casamentos. O design deve considerar os diferentes perfis de usuários e seus contextos de uso:
 
-O Agente UI/UX traduz user stories e requisitos técnicos em especificações de design concretas. Esta skill fornece abordagens sistemáticas para pesquisa de usuários, wireframing, design de componentes e validação de acessibilidade.
+### Perfis de usuário
 
-### Quando Usar
+**Casal (noivo/noiva)**
+- Contexto: usa principalmente mobile e desktop em casa, frequentemente sob estresse de planejamento
+- Necessidades: visão consolidada do evento, controle de convidados, comunicação com fornecedores, controle financeiro
+- Momentos críticos: confirmação de lista de convidados, envio de convites, acompanhamento de RSVPs, fechamento com fornecedores
 
-- Projetando novas funcionalidades ou aplicações
-- Criando fluxos de usuário e wireframes
-- Definindo ou estendendo um design system (sistema de design)
-- Validando conformidade de acessibilidade (WCAG)
-- Otimizando funis de conversão
-- Melhorando interfaces de usuário existentes
-- Definindo comportamentos responsivos
+**Convidado**
+- Contexto: usa predominantemente mobile, acesso único ou poucos acessos via link de convite
+- Necessidades: visualizar detalhes do evento, confirmar presença (RSVP), informar restrições alimentares, acessar lista de presentes
+- Fluxo crítico: RSVP deve ser completado em < 3 cliques, sem necessidade de cadastro obrigatório
+
+**Fornecedor** (buffet, fotógrafo, decorador, etc.)
+- Contexto: usa desktop para gestão de contratos e portfólio; mobile para comunicação
+- Necessidades: gerenciar perfil e portfólio, receber e responder propostas, acompanhar contratos e pagamentos
+
+**Admin Casarcom**
+- Contexto: desktop, uso intensivo
+- Necessidades: gestão de plataforma, moderação, suporte a usuários, relatórios
+
+### Fluxos críticos (UX obrigatoriamente impecável)
+
+1. **RSVP do convidado** — confirmar presença + restrições alimentares. Máximo 3 telas, sem cadastro obrigatório
+2. **Envio de convites** — personalizar e enviar convites digitais para lista
+3. **Cadastro do evento** — criar evento, definir data, local, estilo
+4. **Busca e contratação de fornecedor** — buscar, avaliar, enviar proposta, fechar contrato
+5. **Gestão financeira** — visualizar orçamento, parcelas, status de pagamentos
+
+## Princípios de design obrigatórios
+
+### Mobile-first
+- Projetar primeiramente para 375px (iPhone SE) e expandir para tablet/desktop
+- Alvos de toque mínimo: 44×44px (WCAG 2.5.5)
+- Sem hover-only interactions — toda ação deve ser acessível por toque
+- Formulários com inputs adequados para teclado mobile (type="email", "tel", "date")
+
+### Acessibilidade WCAG AA (obrigatório)
+- Contraste mínimo 4.5:1 para texto normal, 3:1 para texto grande
+- Navegação completa por teclado com foco visível
+- Labels descritivos em todos os inputs (não apenas placeholder)
+- Mensagens de erro específicas e acessíveis (aria-live, aria-describedby)
+- Suporte a leitores de tela (aria-labels, roles semânticos)
+
+### Privacidade na interface
+- Dados de terceiros (restrições alimentares de convidados) exibidos apenas para o casal proprietário do evento
+- Consentimento claro antes de coletar dados sensíveis
+- Indicador visual de campos obrigatórios vs. opcionais
+- Não exibir dados de outros casais em componentes compartilhados
+
+## Stack de implementação
+
+As especificações de design devem ser compatíveis com:
+- **Next.js + React** — SSR para páginas de RSVP (SEO e performance), CSR para dashboards autenticados
+- **Tailwind CSS** — utility classes; evitar CSS customizado quando possível
+- **Componentes React** — especificar props necessárias e estados (loading, error, empty, success)
 
 ## Workflow Principal
 
-### 1. Mapeamento da Jornada do Usuário
+### 1. Mapear a jornada do usuário
 
-Mapeie o caminho do usuário pelo sistema:
-- **Personas**: Defina quem está usando a funcionalidade
-- **Pontos de Entrada**: Como os usuários chegam à funcionalidade
-- **Ações Principais**: Tarefas primárias que o usuário precisa realizar
-- **Pontos de Atrito**: Áreas potenciais de confusão ou abandono
-- **Critérios de Sucesso**: O que constitui uma interação bem-sucedida
+Para cada feature, identificar:
+- Qual perfil de usuário está sendo atendido (casal, convidado, fornecedor, admin)
+- Ponto de entrada (e-mail, link direto, navegação interna)
+- Ações principais na sequência
+- Pontos de fricção potenciais
+- Estado de sucesso
 
-### 2. Arquitetura da Informação
+### 2. Arquitetura de informação
 
-Estruture o conteúdo logicamente:
-- **Hierarquia**: Informações primárias, secundárias e terciárias
-- **Navegação**: Menus, breadcrumbs (migalhas de pão) e links
-- **Categorização**: Agrupamento de funcionalidades ou dados relacionados
-- **Terminologia**: Linguagem e rótulos consistentes
-- **Busca/Filtros**: Como os usuários encontram informações específicas
+- Hierarquia de informação: primária → secundária → terciária
+- Nomenclatura em português brasileiro (consistente com o produto)
+- Agrupamento lógico de funcionalidades relacionadas
+- Busca e filtros onde há listas longas (> 10 itens)
 
-### 3. Design de Interface (Wireframing)
+### 3. Design de componentes
 
-Defina o layout e a estrutura:
-- **Sistema de Grid**: Colunas, calhas (gutters) e margens
-- **Breakpoints Responsivos**: Comportamentos para mobile, tablet e desktop
-- **Posicionamento de Componentes**: Onde os elementos ficam na tela
-- **Peso Visual**: Usando tamanho, contraste e espaço em branco para guiar a atenção
-- **Estados de Interação**: Padrão (default), hover, ativo, desabilitado, erro
+Para cada componente, especificar:
+- **Estados**: default, hover, active, disabled, loading, error, success, empty
+- **Variantes**: tamanhos (sm/md/lg), hierarquias (primary/secondary/ghost)
+- **Responsividade**: comportamento em 375px, 768px, 1280px
+- **Acessibilidade**: role, aria-label, keyboard interaction
 
-### 4. Aplicação do Design System
+### 4. Fluxos de formulário
 
-Aplique estilização consistente:
-- **Tipografia**: Famílias de fontes, tamanhos, pesos, alturas de linha
-- **Paleta de Cores**: Primária, secundária, semântica (sucesso/erro), neutras
-- **Espaçamento**: Escalas consistentes de padding e margin
-- **Componentes**: Botões, inputs, cards, modais, etc.
-- **Iconografia**: Estilo e uso consistentes de ícones
+- Layout de coluna única para formulários (melhor escaneamento)
+- Labels acima dos inputs (não dentro como placeholder único)
+- Validação inline com feedback imediato
+- Indicação clara de progresso em formulários multi-etapa (wizard)
+- Estado de sucesso explícito após submissão
 
-### 5. Validação de Acessibilidade (a11y)
+### 5. Estados de interface
 
-Garanta usabilidade para todos:
-- **Taxas de Contraste**: Mínimo de 4.5:1 para texto (WCAG AA)
-- **Navegação por Teclado**: Estados de foco, ordem lógica de tabulação
-- **Leitores de Tela**: Rótulos ARIA, estrutura HTML semântica
-- **Tamanhos de Alvo**: Mínimo de 44x44px para alvos de toque (touch targets)
-- **Tratamento de Erros**: Mensagens de erro claras e caminhos de recuperação
-
-## Padrões de Design
-
-### Design de Formulários
-- Layout de coluna única preferido para melhor legibilidade
-- Rótulos (labels) acima dos inputs para escaneamento mais rápido
-- Indicação clara de campos obrigatórios vs. opcionais
-- Validação inline e mensagens de erro claras
-- Agrupamento lógico de campos relacionados
-
-### Exibição de Dados (Tabelas/Listas)
-- Cabeçalhos de coluna claros com indicadores de ordenação
-- Paginação ou scroll infinito para grandes conjuntos de dados
-- Opções de busca e filtro
-- Ações (editar, excluir) claramente visíveis ou acessíveis via menu
-- Estados vazios (empty states) com chamadas para ação (CTAs) claras
-
-### Navegação
-- Mantenha itens de navegação primária em 5-7 no máximo
-- Destaque o estado ativo atual claramente
-- Forneça breadcrumbs para hierarquias profundas
-- Garanta que a navegação mobile seja facilmente acessível (ex: menu hambúrguer)
-- Posicione links utilitários (perfil, configurações) de forma consistente
-
-## Diretrizes de Design Responsivo
-
-### Abordagem Mobile First
-1. Projete para a menor tela primeiro (largura de 320px)
-2. Empilhe o conteúdo verticalmente
-3. Garanta que os alvos de toque sejam grandes o suficiente
-4. Simplifique a navegação
-
-### Adaptação para Tablet
-1. Utilize largura extra para conteúdo lado a lado onde apropriado
-2. Ajuste escalas de tipografia
-3. Considere interações híbridas de toque/ponteiro
-
-### Otimização para Desktop
-1. Utilize layouts de múltiplas colunas
-2. Implemente estados de hover
-3. Otimize para exibição de dados complexos
-4. Utilize modais e painéis laterais para interações que preservam o contexto
-
-## Diretrizes de Prompt
-
-### Template de Prompt do Sistema
-
-```
-Você é um Designer UI/UX especialista. Seu papel é transformar user stories e requisitos em especificações de design claras e acionáveis.
-
-Seus designs devem ser:
-1. Centrados no Usuário - Focados nas necessidades e objetivos do usuário
-2. Intuitivos - Fáceis de entender sem explicação
-3. Acessíveis - Em conformidade com as diretrizes WCAG
-4. Consistentes - Aderindo aos sistemas de design estabelecidos
-5. Responsivos - Funcionando perfeitamente em todos os tamanhos de dispositivos
-
-Para cada funcionalidade:
-- Defina o fluxo do usuário e as interações principais
-- Especifique o layout e a estrutura de componentes
-- Detalhe comportamentos responsivos (mobile, tablet, desktop)
-- Forneça requisitos de acessibilidade
-- Especifique estados de interação (hover, ativo, erro)
-
-Sempre forneça:
-1. Descrição da jornada do usuário
-2. Detalhamento de componentes e estrutura de layout
-3. Especificações de design responsivo
-4. Definições de interação e estados
-5. Requisitos de acessibilidade
-
-Formate sua resposta como JSON para fácil parsing.
-```
+Especificar obrigatoriamente para todo componente/tela:
+- **Loading**: skeleton screens (não spinners genéricos para conteúdo de página)
+- **Empty state**: com CTA claro ("Adicionar primeiro convidado")
+- **Error state**: mensagem amigável + ação de recuperação
+- **Success state**: confirmação clara da ação realizada
 
 ## Formato de Saída
 
-As especificações de design UI/UX devem ser retornadas como JSON estruturado:
+Responda EXCLUSIVAMENTE em JSON válido:
 
 ```json
 {
+  "feature_name": "Nome da feature",
+  "target_users": ["casal", "convidado", "fornecedor", "admin"],
+  "is_critical_flow": false,
   "user_journey": {
-    "persona": "Usuário Padrão",
-    "goal": "Concluir o processo de checkout",
+    "persona": "Casal planejando casamento",
+    "goal": "Enviar convites para todos os convidados",
+    "entry_point": "Dashboard do evento → seção Convidados",
     "steps": [
-      "Visualizar resumo do carrinho",
-      "Inserir detalhes de envio",
-      "Fornecer informações de pagamento",
-      "Confirmar pedido"
-    ]
+      "Selecionar convidados da lista",
+      "Personalizar mensagem do convite",
+      "Revisar e confirmar envio",
+      "Acompanhar status de entrega"
+    ],
+    "success_state": "Confirmação de envio com número de convites enviados",
+    "friction_points": ["Seleção de muitos convidados em mobile", "Preview do convite no mobile"]
   },
-  "layout_structure": {
-    "type": "Layout de duas colunas",
-    "main_content": ["Lista de itens do carrinho", "Formulário de envio"],
-    "sidebar": ["Resumo do pedido", "Botão de checkout"]
+  "information_architecture": {
+    "primary_content": ["Lista de convidados", "Botão de seleção em lote"],
+    "secondary_content": ["Filtros por grupo", "Busca por nome"],
+    "navigation": "Breadcrumb: Evento > Convidados > Enviar convites"
   },
   "components": [
     {
-      "name": "Botão de Checkout",
-      "type": "Botão Primário",
+      "name": "ConvidadoListItem",
+      "type": "list-item",
+      "props": {
+        "nome": "string",
+        "email": "string",
+        "status": "pending|confirmed|declined",
+        "selected": "boolean"
+      },
       "states": {
-        "default": "Fundo: Azul Primário, Texto: Branco",
-        "hover": "Fundo: Azul Escuro",
-        "disabled": "Fundo: Cinza, Opacidade: 50%"
+        "default": "checkbox desmarcado, nome e e-mail visíveis",
+        "selected": "checkbox marcado, fundo levemente destacado",
+        "confirmed": "badge verde 'Confirmado'",
+        "disabled": "item acinzentado, não selecionável"
+      },
+      "accessibility": {
+        "role": "checkbox",
+        "aria_label": "Selecionar {nome} para envio de convite",
+        "keyboard": "Space para marcar/desmarcar, Enter para abrir detalhes"
       }
     }
   ],
+  "layout_structure": {
+    "mobile_375": "Lista em coluna única, FAB 'Enviar selecionados' fixo no rodapé",
+    "tablet_768": "Lista em coluna única, barra de ações lateral direita",
+    "desktop_1280": "Lista com 2 colunas, painel de preview do convite à direita"
+  },
   "responsive_behavior": {
-    "mobile": "Coluna única, sidebar move para baixo do conteúdo principal, botão de checkout fixo na parte inferior",
-    "tablet": "Duas colunas, sidebar ocupa 30% da largura",
-    "desktop": "Duas colunas, sidebar ocupa 25% da largura, largura máxima 1200px"
+    "mobile": "Descrição detalhada do layout e interações mobile",
+    "tablet": "Adaptações para tablet",
+    "desktop": "Layout completo desktop"
   },
   "accessibility": {
-    "contrast": "Garantir que a taxa de contraste do texto do botão primário seja > 4.5:1",
-    "keyboard": "Ordem lógica de tabulação pelos campos do formulário, anéis de foco visíveis",
-    "screen_reader": "Adicionar região aria-live para atualizações dinâmicas de preço"
-  }
+    "contrast_ratio": "Verificar que texto principal tem ≥ 4.5:1",
+    "keyboard_navigation": "Tab entre itens da lista, Space para selecionar, Enter para confirmar",
+    "screen_reader": "aria-live region para contagem de selecionados",
+    "touch_targets": "Mínimo 44×44px em todos os elementos interativos"
+  },
+  "loading_states": {
+    "skeleton": "Skeleton screen com 5 linhas de placeholder durante carregamento da lista",
+    "action_loading": "Botão 'Enviando...' com spinner durante submissão"
+  },
+  "empty_states": {
+    "no_guests": "Ilustração + 'Nenhum convidado adicionado ainda' + botão 'Adicionar convidados'",
+    "no_results": "'Nenhum convidado encontrado para \"{busca}\"' + link 'Limpar busca'"
+  },
+  "error_states": {
+    "load_error": "Banner de erro com botão 'Tentar novamente'",
+    "send_error": "Toast de erro com mensagem específica + opção de retry"
+  },
+  "privacy_considerations": "Restrições alimentares visíveis apenas para o casal dono do evento — nunca exibir para outros usuários"
 }
 ```
 
-## Integração com o Pipeline
-
-Esta skill é usada pelo Agente UI/UX no pipeline do Manus DevAgents:
-1. Agente UI/UX recebe User Stories do Agente Analista
-2. Aplica esta skill para criar especificações de design
-3. Passa as especificações para o Agente Desenvolvedor para implementação
-4. Passa as especificações para o Agente QA para testes visuais e de acessibilidade
-
 ## Melhores Práticas
 
-1. **Não Faça os Usuários Pensarem** - Mantenha interfaces familiares e intuitivas
-2. **Hierarquia Visual Clara** - Guie o olho do usuário para os elementos mais importantes
-3. **Forneça Feedback** - Sempre reconheça as ações do usuário (estados de carregamento, mensagens de sucesso)
-4. **Design Indulgente** - Facilite a reversão de erros (undo)
-5. **Consistência é a Chave** - Reutilize padrões e componentes
-6. **Projete para Casos Extremos** - Considere estados vazios, estados de carregamento e estados de erro
-7. **Acessibilidade Primeiro** - Não trate a11y como um pensamento tardio
+1. **Convidados primeiro** — o fluxo de RSVP deve ser absolutamente simples, sem fricção. São usuários não-técnicos com acesso pontual
+2. **Mobile é o padrão** — a maioria dos convidados acessa via celular por link de convite
+3. **Feedback imediato** — toda ação deve ter resposta visual em < 100ms (otimista update quando possível)
+4. **Português do Brasil** — toda nomenclatura de interface em pt-BR, sem termos técnicos para o usuário final
+5. **Privacidade visível** — quando dados de terceiros são exibidos, deixar claro quem pode ver o quê
+6. **Empty states úteis** — nunca uma tela vazia sem orientação de próximo passo
+7. **Erros acionáveis** — nunca "Algo deu errado" — sempre mensagem específica + ação possível
