@@ -420,7 +420,7 @@
       <div class="header-controls">
         <h3>📋 Histórico de Execuções</h3>
         <div>
-          <span class="last-updated" id="last-updated">Atualizado agora</span>
+          <span class="last-updated" id="last-updated"></span>
           <button class="refresh-btn" onclick="loadDashboard()">🔄 Atualizar</button>
         </div>
       </div>
@@ -460,6 +460,7 @@
       try {
         // Carregar estatísticas
         const statsRes = await fetch('/api/dashboard/stats', { headers: apiHeaders() });
+        if (!statsRes.ok) throw new Error(`HTTP ${statsRes.status}`);
         const stats = await statsRes.json();
 
         document.getElementById('successful-count').textContent = stats.successfulExecutions;
@@ -469,24 +470,28 @@
 
         // Carregar distribuição
         const distRes = await fetch('/api/dashboard/distribution', { headers: apiHeaders() });
+        if (!distRes.ok) throw new Error(`HTTP ${distRes.status}`);
         const dist = await distRes.json();
 
         updateDistributionChart(dist);
 
         // Carregar timeline
         const timelineRes = await fetch('/api/dashboard/timeline', { headers: apiHeaders() });
+        if (!timelineRes.ok) throw new Error(`HTTP ${timelineRes.status}`);
         const timelineData = await timelineRes.json();
 
         updateTimelineChart(timelineData.timeline || []);
 
         // Carregar erros
         const errorsRes = await fetch('/api/dashboard/errors', { headers: apiHeaders() });
+        if (!errorsRes.ok) throw new Error(`HTTP ${errorsRes.status}`);
         const errors = await errorsRes.json();
 
         updateErrorsList(errors);
 
         // Carregar tempo economizado
         const timeSavedRes = await fetch('/api/dashboard/time-saved', { headers: apiHeaders() });
+        if (!timeSavedRes.ok) throw new Error(`HTTP ${timeSavedRes.status}`);
         const timeSaved = await timeSavedRes.json();
 
         document.getElementById('total-executions').textContent = timeSaved.totalExecutions;
@@ -512,6 +517,7 @@
         if (type) url += `&type=${type}`;
 
         const res = await fetch(url, { headers: apiHeaders() });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
         let html = `
