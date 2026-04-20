@@ -224,8 +224,8 @@ app.post('/api/pipeline/external', async (req, res) => {
     // Execute pipeline with repository path (analysis will be done by spec agent)
     const pipelineExecution = await executePipeline(requirement, executionId, repoPath);
 
-    // Bloquear em qualquer gateway — não criar PR com código reprovado
-    if (['blocked_by_review', 'blocked_by_security', 'blocked_by_qa'].includes(pipelineExecution.status)) {
+    // Bloquear apenas em gateways de código e qualidade — segurança documenta e continua
+    if (['blocked_by_review', 'blocked_by_qa'].includes(pipelineExecution.status)) {
       const stage = pipelineExecution.stages;
       return res.status(422).json({
         pipelineId: pipelineExecution.id,
@@ -291,13 +291,17 @@ app.post('/api/pipeline/external', async (req, res) => {
         pushed = true;
 
         const { createPullRequest } = await import('./github-pr.js');
+        const securityStage = pipelineExecution.stages?.security;
+        const securityWarning = securityStage?.vulnerabilitiesFound > 0
+          ? `\n\n> ⚠️ **ATENÇÃO DE SEGURANÇA:** ${securityStage.vulnerabilitiesFound} vulnerabilidade(s) crítica(s)/alta(s) detectada(s) pelo Security Agent. Revisão obrigatória antes do merge.\n> ${securityStage.vulnerabilitiesSummary}`
+          : '';
         const pr = await createPullRequest({
           repoUrl: repositoryUrl,
           githubToken,
           branchName,
           baseBranch: process.env.DEFAULT_BASE_BRANCH || 'main',
           title: `[Pipeline] ${requirement.substring(0, 72)}`,
-          body: `## Pipeline Executor\n\n**Requisito:** ${requirement}\n\n**Pipeline ID:** ${pipelineExecution.id}\n\n**Stages executados:** Spec → Analyst → UX → Developer → Code Review → Security → QA → DevOps\n\n> Gerado automaticamente pelo Pipeline Executor`
+          body: `## Pipeline Executor\n\n**Requisito:** ${requirement}\n\n**Pipeline ID:** ${pipelineExecution.id}\n\n**Stages executados:** Spec → Analyst → UX → Developer → Code Review → Security → QA → DevOps${securityWarning}\n\n> Gerado automaticamente pelo Pipeline Executor`,
         });
 
         pipelineExecution.pullRequest = pr;

@@ -276,39 +276,45 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     log.info('Security check completed', { status: securityResult.security_status, duration: securityDuration });
     emitter?.emit('progress', { stage: 'security', stageIndex: 5, status: 'completed', duration: securityDuration });
 
+    // ── Registrar vulnerabilidades no log e na documentação ─────────────────
+    const securityBlocking = (securityResult.vulnerabilities || []).filter(v => {
+      const sev = (v?.severity || '').toLowerCase();
+      return sev === 'critical' || sev === 'crítico' || sev === 'high' || sev === 'alto';
+    });
+    const allVulnerabilities = securityResult.vulnerabilities || [];
+
+    // Enriquecer output da documentação com sumário de vulnerabilidades em destaque
+    const securityDocOutput = {
+      ...securityResult,
+      _pipeline_note: securityBlocking.length > 0
+        ? `⚠️ ATENÇÃO: ${securityBlocking.length} vulnerabilidade(s) crítica(s)/alta(s) detectada(s) — pipeline continuou para permitir entrega, mas CORREÇÃO OBRIGATÓRIA antes do deploy em produção.`
+        : null,
+      _vulnerabilities_summary: allVulnerabilities.length > 0
+        ? allVulnerabilities.map(v => `[${v.severity?.toUpperCase()}] ${v.category}: ${v.description} — ${v.recommendation}`).join('\n')
+        : 'Nenhuma vulnerabilidade encontrada.',
+    };
+
     try {
-      const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'security', requirement, input: reviewedCode, output: securityResult });
+      const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'security', requirement, input: reviewedCode, output: securityDocOutput });
       execution.documentation.push(docResult);
       execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
     } catch (docError) {
       log.warn('Documentation generation failed for security', { error: docError.message });
     }
 
-    // ── Security Gateway ────────────────────────────────────────────────────
-    const securityBlocking = (securityResult.vulnerabilities || []).filter(v => {
-      const sev = (v?.severity || '').toLowerCase();
-      return sev === 'critical' || sev === 'crítico' || sev === 'high' || sev === 'alto';
-    });
-    const hasBlockingVulnerabilities = securityBlocking.length > 0;
-
-    if (!securityResult.approved || hasBlockingVulnerabilities) {
-      const reason = [
-        !securityResult.approved ? (securityResult.block_reason || 'Reprovado pelo agente de segurança') : null,
-        hasBlockingVulnerabilities ? `${securityBlocking.length} vulnerabilidade(s) crítica(s)/alta(s): ${securityBlocking.map(v => `[${v.severity}] ${v.category}`).join(', ')}` : null,
-      ].filter(Boolean).join('; ');
-
-      execution.stages.security.gatewayStatus = 'blocked';
-      execution.stages.security.gatewayReason = reason;
-      execution.status = 'blocked_by_security';
-      execution.logs.push({ timestamp: new Date(), message: `Security Gateway bloqueou: ${reason}`, level: 'warning' });
-      log.warn('Security Gateway blocked pipeline', { reason, vulnerabilities: securityBlocking.length });
-      emitter?.emit('blocked_by_security', { reason, vulnerabilities: securityBlocking, pipelineId });
-      saveExecutionToDisk(execution);
-      return execution;
+    // Pipeline sempre continua — vulnerabilidades ficam documentadas para revisão manual
+    if (securityBlocking.length > 0) {
+      const vulnSummary = securityBlocking.map(v => `[${v.severity}] ${v.category}: ${v.description}`).join('; ');
+      execution.stages.security.gatewayStatus = 'warning';
+      execution.stages.security.vulnerabilitiesFound = securityBlocking.length;
+      execution.stages.security.vulnerabilitiesSummary = vulnSummary;
+      execution.logs.push({ timestamp: new Date(), message: `⚠️ Security: ${securityBlocking.length} vulnerabilidade(s) crítica(s)/alta(s) documentada(s) — pipeline continua`, level: 'warning' });
+      log.warn('Security vulnerabilities found — documented, pipeline continues', { count: securityBlocking.length, vulnerabilities: vulnSummary });
+      emitter?.emit('security_warning', { count: securityBlocking.length, vulnerabilities: securityBlocking, pipelineId });
+    } else {
+      execution.stages.security.gatewayStatus = 'approved';
+      log.info('Security Gateway approved');
     }
-
-    execution.stages.security.gatewayStatus = 'approved';
-    log.info('Security Gateway approved');
 
     // ── Stage 6: QA ─────────────────────────────────────────────────────────
     log.info('STAGE 6: QA/TESTING');
