@@ -175,7 +175,10 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     execution.logs.push({ timestamp: new Date(), message: 'Starting QA stage...', level: 'info' });
 
     const qaStart = Date.now();
-    const qaResult = await qaAgent(JSON.stringify(code));
+    const qaInput = code.code
+      ? `Linguagem: ${code.language || 'desconhecida'}\n\nCódigo:\n${code.code}`
+      : JSON.stringify(code);
+    const qaResult = await qaAgent(qaInput);
     const qaDuration = `${Date.now() - qaStart}ms`;
 
     execution.stages.qa = { status: 'completed', result: qaResult, duration: qaDuration };
