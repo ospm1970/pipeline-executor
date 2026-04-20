@@ -173,6 +173,16 @@ export async function developerAgent(specification, triggerType = 'feature') {
     let code = null;
     try { code = extractJSON(response.choices[0].message.content); } catch { /* fall through to autoCorrect */ }
 
+    // Detectar schema inválido: files como array de strings (sem content) ou com content vazio
+    if (code && Array.isArray(code.files)) {
+      const hasStringFiles = code.files.some(f => typeof f === 'string');
+      const hasEmptyContent = code.files.some(f => typeof f === 'object' && (!f.content || f.content.trim() === ''));
+      if (hasStringFiles || hasEmptyContent || code.files.length === 0) {
+        console.warn('⚠️ Developer Agent: files[] sem conteúdo real — forçando auto-correção');
+        code = null;
+      }
+    }
+
     if (!code || !validateJSON(code, requiredFields)) {
       console.warn('⚠️ Developer Agent: JSON inválido, tentando auto-correção...');
       code = await autoCorrectJSON(specification, 'developer', requiredFields);
@@ -181,7 +191,13 @@ export async function developerAgent(specification, triggerType = 'feature') {
       }
     }
 
-    console.log('✅ Developer Agent: JSON validado com sucesso');
+    // Validação final: garantir que há ao menos um arquivo com conteúdo real
+    if (!Array.isArray(code.files) || code.files.length === 0 ||
+        code.files.every(f => typeof f === 'string' || !f.content || f.content.trim() === '')) {
+      throw new Error('Developer Agent: nenhum arquivo com conteúdo gerado — verifique o SKILL.md do developer-agent');
+    }
+
+    console.log(`✅ Developer Agent: ${code.files.length} arquivo(s) gerado(s)`);
     return code;
   } catch (error) {
     console.error('❌ Developer Agent Error:', error.message);

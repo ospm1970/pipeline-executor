@@ -223,16 +223,21 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
       }
 
       if (attempt < CODE_REVIEW_MAX_RETRIES) {
-        // Envia blocking_issues de volta ao developer para correção
+        // Envia blocking_issues de volta ao developer com contexto completo
         log.warn('Code review blocked — re-sending to developer agent', { attempt, issues: reviewResult.blocking_issues });
         execution.logs.push({ timestamp: new Date(), message: `Re-enviando ao developer (tentativa ${attempt + 1}): ${reviewResult.blocking_issues.join('; ')}`, level: 'warn' });
         emitter?.emit('progress', { stage: 'code_review', stageIndex: 4, status: 'retry', attempt });
 
         const correctionSpec = JSON.stringify({
-          original_specification: JSON.parse(reviewedCode._specInput || '{}'),
+          // Contexto completo para o developer não gerar código vazio
+          analysis: devInput.analysis,
+          repositoryContext: devInput.repositoryContext,
           blocking_issues: reviewResult.blocking_issues,
           warnings: reviewResult.warnings,
-          previous_files: reviewedCode.files,
+          previous_files: (reviewedCode.files || []).map(f =>
+            typeof f === 'object' ? { path: f.path, issue: 'revisar conteúdo' } : f
+          ),
+          instruction: 'Corrija os blocking_issues listados e gere novamente o código completo com conteúdo real em cada arquivo.',
         });
         reviewedCode = await developerAgent(correctionSpec, triggerType);
       }

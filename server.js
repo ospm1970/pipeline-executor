@@ -224,12 +224,19 @@ app.post('/api/pipeline/external', async (req, res) => {
     // Execute pipeline with repository path (analysis will be done by spec agent)
     const pipelineExecution = await executePipeline(requirement, executionId, repoPath);
 
-    if (pipelineExecution.status === 'blocked_by_qa') {
+    // Bloquear em qualquer gateway — não criar PR com código reprovado
+    if (['blocked_by_review', 'blocked_by_security', 'blocked_by_qa'].includes(pipelineExecution.status)) {
+      const stage = pipelineExecution.stages;
       return res.status(422).json({
         pipelineId: pipelineExecution.id,
-        status: 'blocked_by_qa',
-        reason: pipelineExecution.stages.qa.gatewayReason,
-        qa: pipelineExecution.stages.qa.result
+        status: pipelineExecution.status,
+        reason: pipelineExecution.error
+          || stage.qa?.gatewayReason
+          || stage.security?.gatewayReason
+          || 'Pipeline bloqueado por gateway de qualidade',
+        code_review: stage.code_review ?? null,
+        security: stage.security ?? null,
+        qa: stage.qa ?? null,
       });
     }
 
@@ -290,7 +297,7 @@ app.post('/api/pipeline/external', async (req, res) => {
           branchName,
           baseBranch: process.env.DEFAULT_BASE_BRANCH || 'main',
           title: `[Pipeline] ${requirement.substring(0, 72)}`,
-          body: `## Pipeline Executor\n\n**Requisito:** ${requirement}\n\n**Pipeline ID:** ${pipelineExecution.id}\n\n**Stages executados:** Spec → Analyst → UX → Developer → QA → DevOps\n\n> Gerado automaticamente pelo Pipeline Executor da Casarcom`
+          body: `## Pipeline Executor\n\n**Requisito:** ${requirement}\n\n**Pipeline ID:** ${pipelineExecution.id}\n\n**Stages executados:** Spec → Analyst → UX → Developer → Code Review → Security → QA → DevOps\n\n> Gerado automaticamente pelo Pipeline Executor`
         });
 
         pipelineExecution.pullRequest = pr;
