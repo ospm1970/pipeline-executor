@@ -218,7 +218,7 @@ Etapa 5: DevOps/Deployment
 
 ---
 
-**Gerado por:** Manus DevAgents - Agente Documentador
+**Gerado por:** Pipeline Executor — Agente Documentador
 `;
 
       const indexPath = path.join(docsDir, 'README.md');
