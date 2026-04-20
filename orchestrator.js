@@ -175,9 +175,14 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     execution.logs.push({ timestamp: new Date(), message: 'Starting QA stage...', level: 'info' });
 
     const qaStart = Date.now();
-    const qaInput = code.code
-      ? `Linguagem: ${code.language || 'desconhecida'}\n\nCódigo:\n${code.code}`
-      : JSON.stringify(code);
+    let qaInput;
+    if (code.files && Array.isArray(code.files) && code.files.length > 0) {
+      qaInput = code.files.map(f => `// ${f.path}\n${f.content}`).join('\n\n');
+    } else if (code.code) {
+      qaInput = `Linguagem: ${code.language || 'desconhecida'}\n\nCódigo:\n${code.code}`;
+    } else {
+      qaInput = JSON.stringify(code);
+    }
     const qaResult = await qaAgent(qaInput);
     const qaDuration = `${Date.now() - qaStart}ms`;
 

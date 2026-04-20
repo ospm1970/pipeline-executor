@@ -152,7 +152,7 @@ export async function developerAgent(specification, triggerType = 'feature') {
     console.log('💻 Developer Agent: Generating code...');
 
     const skillContent = await loadSkill('developer-agent', triggerType);
-    const requiredFields = ['code', 'language', 'functions', 'dependencies', 'code_quality_score'];
+    const requiredFields = ['files', 'code_quality_score', 'dependencies'];
 
     const response = await withRetry(
       (signal) => openai.chat.completions.create({
