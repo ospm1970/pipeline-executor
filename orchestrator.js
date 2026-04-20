@@ -1,9 +1,11 @@
 import { analystAgent, developerAgent, qaAgent, devopsAgent } from './agents.js';
 import { codeReviewAgent, buildReviewInput } from './agents-code-review.js';
+import { securityAgent } from './agents-security.js';
 import { UIUXAgentWithSkill } from './agents-ux.js';
 import { SpecAgentWithSkill } from './agents-spec.js';
 import DocumenterAgentWithSkill from './agents-documenter.js';
 import { RepositoryAnalyzer } from './repository-analyzer.js';
+import QARunner from './qa-runner.js';
 import logger from './logger.js';
 import fs from 'fs';
 import path from 'path';
@@ -155,7 +157,29 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     execution.logs.push({ timestamp: new Date(), message: 'Starting development stage...', level: 'info' });
 
     const devStart = Date.now();
-    const code = await developerAgent(JSON.stringify(analysis));
+
+    let repoModuleType = 'commonjs';
+    if (repositoryPath) {
+      try {
+        const pkgPath = path.join(repositoryPath, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+          if (pkg.type === 'module') repoModuleType = 'esm';
+        }
+      } catch (_) { /* ignore */ }
+    }
+
+    const devInput = {
+      analysis,
+      repositoryContext: repositoryAnalysis ? {
+        projectType: repositoryAnalysis.type,
+        moduleType: repoModuleType,
+        existingDependencies: repositoryAnalysis.dependencies?.runtime || [],
+        mainFiles: (repositoryAnalysis.mainFiles || []).map(f => f.relativePath || f.path),
+        endpoints: (repositoryAnalysis.endpoints || []).slice(0, 20),
+      } : null,
+    };
+    const code = await developerAgent(JSON.stringify(devInput));
     const devDuration = `${Date.now() - devStart}ms`;
 
     execution.stages.development = { status: 'completed', result: code, duration: devDuration };
@@ -234,30 +258,96 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
       log.warn('Documentation generation failed for code review', { error: docError.message });
     }
 
-    // ── Stage 5: QA ─────────────────────────────────────────────────────────
-    log.info('STAGE 5: QA/TESTING');
+    // ── Stage 5: Security ───────────────────────────────────────────────────
+    log.info('STAGE 5: SECURITY');
+    execution.logs.push({ timestamp: new Date(), message: 'Starting security stage...', level: 'info' });
+
+    const securityStart = Date.now();
+    const securityResult = await securityAgent(reviewedCode, triggerType);
+    const securityDuration = `${Date.now() - securityStart}ms`;
+
+    execution.stages.security = { status: 'completed', result: securityResult, duration: securityDuration };
+    execution.logs.push({ timestamp: new Date(), message: `Security check: ${securityResult.security_status}`, level: securityResult.approved ? 'success' : 'warn' });
+    log.info('Security check completed', { status: securityResult.security_status, duration: securityDuration });
+    emitter?.emit('progress', { stage: 'security', stageIndex: 5, status: 'completed', duration: securityDuration });
+
+    try {
+      const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'security', requirement, input: reviewedCode, output: securityResult });
+      execution.documentation.push(docResult);
+      execution.logs.push({ timestamp: new Date(), message: `Documentation generated: ${docResult.relativePath}`, level: 'info' });
+    } catch (docError) {
+      log.warn('Documentation generation failed for security', { error: docError.message });
+    }
+
+    // ── Security Gateway ────────────────────────────────────────────────────
+    const securityBlocking = (securityResult.vulnerabilities || []).filter(v => {
+      const sev = (v?.severity || '').toLowerCase();
+      return sev === 'critical' || sev === 'crítico' || sev === 'high' || sev === 'alto';
+    });
+    const hasBlockingVulnerabilities = securityBlocking.length > 0;
+
+    if (!securityResult.approved || hasBlockingVulnerabilities) {
+      const reason = [
+        !securityResult.approved ? (securityResult.block_reason || 'Reprovado pelo agente de segurança') : null,
+        hasBlockingVulnerabilities ? `${securityBlocking.length} vulnerabilidade(s) crítica(s)/alta(s): ${securityBlocking.map(v => `[${v.severity}] ${v.category}`).join(', ')}` : null,
+      ].filter(Boolean).join('; ');
+
+      execution.stages.security.gatewayStatus = 'blocked';
+      execution.stages.security.gatewayReason = reason;
+      execution.status = 'blocked_by_security';
+      execution.logs.push({ timestamp: new Date(), message: `Security Gateway bloqueou: ${reason}`, level: 'warning' });
+      log.warn('Security Gateway blocked pipeline', { reason, vulnerabilities: securityBlocking.length });
+      emitter?.emit('blocked_by_security', { reason, vulnerabilities: securityBlocking, pipelineId });
+      saveExecutionToDisk(execution);
+      return execution;
+    }
+
+    execution.stages.security.gatewayStatus = 'approved';
+    log.info('Security Gateway approved');
+
+    // ── Stage 6: QA ─────────────────────────────────────────────────────────
+    log.info('STAGE 6: QA/TESTING');
     execution.logs.push({ timestamp: new Date(), message: 'Starting QA stage...', level: 'info' });
 
     const qaStart = Date.now();
+
+    // Coletar evidências reais de execução antes de chamar o LLM
+    let runnerResults = null;
+    if (repositoryPath) {
+      execution.logs.push({ timestamp: new Date(), message: 'Running real tests and collecting coverage...', level: 'info' });
+      try {
+        runnerResults = await QARunner.run(repositoryPath, reviewedCode);
+        const coverageMsg = runnerResults.coverage
+          ? `coverage: ${runnerResults.coverage.overall}%`
+          : (runnerResults.errors?.length > 0 ? runnerResults.errors[0] : 'coverage não disponível');
+        execution.logs.push({ timestamp: new Date(), message: `QA Runner: ${runnerResults.ran ? 'executado' : 'não executado'} — ${coverageMsg}`, level: 'info' });
+        log.info('QA Runner completed', { ran: runnerResults.ran, coverage: runnerResults.coverage?.overall, framework: runnerResults.framework });
+      } catch (runnerError) {
+        log.warn('QA Runner failed — proceeding with LLM-only QA', { error: runnerError.message });
+        execution.logs.push({ timestamp: new Date(), message: `QA Runner falhou: ${runnerError.message} — usando QA apenas via LLM`, level: 'warning' });
+      }
+    }
+
     let qaInput;
     if (reviewedCode.files?.length > 0) {
       const implSection = `## Arquivos de implementação\n\n${reviewedCode.files.map(f => `// ${f.path}\n${f.content}`).join('\n\n')}`;
       const testsSection = reviewedCode.tests?.length > 0
         ? `\n\n## Arquivos de teste\n\n${reviewedCode.tests.map(f => `// ${f.path}\n${f.content}`).join('\n\n')}`
         : '\n\n## Arquivos de teste\n\n(nenhum arquivo de teste gerado pelo developer agent)';
-      qaInput = implSection + testsSection;
+      qaInput = { code: implSection + testsSection, runnerResults };
     } else if (reviewedCode.code) {
-      qaInput = `Linguagem: ${reviewedCode.language || 'desconhecida'}\n\nCódigo:\n${reviewedCode.code}`;
+      qaInput = { code: `Linguagem: ${reviewedCode.language || 'desconhecida'}\n\nCódigo:\n${reviewedCode.code}`, runnerResults };
     } else {
-      qaInput = JSON.stringify(reviewedCode);
+      qaInput = { code: JSON.stringify(reviewedCode), runnerResults };
     }
+
     const qaResult = await qaAgent(qaInput);
     const qaDuration = `${Date.now() - qaStart}ms`;
 
     execution.stages.qa = { status: 'completed', result: qaResult, duration: qaDuration };
     execution.logs.push({ timestamp: new Date(), message: 'QA tests completed', level: 'success' });
     log.info('QA completed', { duration: qaDuration });
-    emitter?.emit('progress', { stage: 'qa', stageIndex: 5, status: 'completed', duration: qaDuration });
+    emitter?.emit('progress', { stage: 'qa', stageIndex: 6, status: 'completed', duration: qaDuration });
 
     try {
       const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'qa', requirement, input: code, output: qaResult });
@@ -269,21 +359,25 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
 
     // ── QA Gateway ──────────────────────────────────────────────────────────
     const qaApproved = qaResult.approved === true;
+    // Cobertura real tem precedência sobre estimativa LLM
     const qaCoverage = qaResult.coverage_percentage || 0;
-    const coverageOk = qaCoverage >= 80;
+    const coverageTarget = 80;
+    const coverageOk = qaCoverage >= coverageTarget;
+    const coverageRegression = qaResult.coverage_regression === true;
+
     const hasCriticalIssues = (qaResult.issues_found || []).some(issue => {
       if (typeof issue === 'string') {
         return issue.toLowerCase().includes('critical') || issue.toLowerCase().includes('crítico');
       }
-      // Para objetos, verifica apenas o campo de severidade — evita falso positivo por descrições
       const severity = (issue?.severity || issue?.level || issue?.type || '').toLowerCase();
       return severity.includes('critical') || severity.includes('crítico');
     });
 
-    if (!qaApproved || !coverageOk || hasCriticalIssues) {
+    if (!qaApproved || !coverageOk || hasCriticalIssues || coverageRegression) {
       const reason = [
         !qaApproved ? 'QA não aprovado pelo agente' : null,
-        !coverageOk ? `Cobertura insuficiente: ${qaCoverage}% (mínimo 80%)` : null,
+        !coverageOk ? `Cobertura insuficiente: ${qaCoverage}% (mínimo ${coverageTarget}%)` : null,
+        coverageRegression ? `Regressão de cobertura: ${qaResult.coverage_delta}% abaixo do baseline` : null,
         hasCriticalIssues ? 'Issues críticas encontradas pelo QA' : null,
       ].filter(Boolean).join('; ');
 
@@ -300,8 +394,8 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     execution.stages.qa.gatewayStatus = 'approved';
     log.info('QA Gateway approved', { coverage: qaCoverage });
 
-    // ── Stage 6: DevOps/Deployment ──────────────────────────────────────────
-    log.info('STAGE 6: DEVOPS/DEPLOYMENT');
+    // ── Stage 7: DevOps/Deployment ──────────────────────────────────────────
+    log.info('STAGE 7: DEVOPS/DEPLOYMENT');
     execution.logs.push({ timestamp: new Date(), message: 'Starting deployment stage...', level: 'info' });
 
     const deployStart = Date.now();
@@ -311,7 +405,7 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     execution.stages.deployment = { status: 'completed', result: deployment, duration: deployDuration };
     execution.logs.push({ timestamp: new Date(), message: 'Deployment plan created', level: 'success' });
     log.info('Deployment completed', { duration: deployDuration });
-    emitter?.emit('progress', { stage: 'deployment', stageIndex: 6, status: 'completed', duration: deployDuration });
+    emitter?.emit('progress', { stage: 'deployment', stageIndex: 7, status: 'completed', duration: deployDuration });
 
     try {
       const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'deployment', requirement, input: code, output: deployment });
@@ -323,7 +417,7 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
 
     // ── Index document ──────────────────────────────────────────────────────
     try {
-      await documenter.generateIndexDocument(pipelineId, ['specification', 'analysis', 'ux_design', 'development', 'code_review', 'qa', 'deployment']);
+      await documenter.generateIndexDocument(pipelineId, ['specification', 'analysis', 'ux_design', 'development', 'code_review', 'security', 'qa', 'deployment']);
       execution.logs.push({ timestamp: new Date(), message: 'Documentation index created', level: 'info' });
     } catch (docError) {
       log.warn('Index document generation failed', { error: docError.message });

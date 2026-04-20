@@ -109,8 +109,10 @@ Gere um documento Markdown profissional e detalhado que explique o que foi execu
         'analysis': '01-analise',
         'ux_design': '02-design-ux',
         'development': '03-desenvolvimento',
-        'qa': '04-qa-testes',
-        'deployment': '05-devops'
+        'code_review': '04-code-review',
+        'security': '05-seguranca',
+        'qa': '06-qa-testes',
+        'deployment': '07-devops',
       };
 
       const fileName = stageFileNames[stage] || stage;
@@ -167,17 +169,21 @@ ${stages.map((stage, index) => {
     'analysis': '📊 Análise',
     'ux_design': '🎨 Design UI/UX',
     'development': '💻 Desenvolvimento',
+    'code_review': '🔎 Code Review',
+    'security': '🔒 Segurança',
     'qa': '🧪 QA/Testes',
-    'deployment': '🚀 DevOps'
+    'deployment': '🚀 DevOps',
   };
-  
+
   const stageFileNames = {
     'specification': '00-especificacao',
     'analysis': '01-analise',
     'ux_design': '02-design-ux',
     'development': '03-desenvolvimento',
-    'qa': '04-qa-testes',
-    'deployment': '05-devops'
+    'code_review': '04-code-review',
+    'security': '05-seguranca',
+    'qa': '06-qa-testes',
+    'deployment': '07-devops',
   };
 
   const stageName = stageNames[stage] || stage;
@@ -211,9 +217,13 @@ Etapa 2: Design UI/UX
    ↓
 Etapa 3: Desenvolvimento
    ↓
-Etapa 4: QA/Testes
+Etapa 4: Code Review
    ↓
-Etapa 5: DevOps/Deployment
+Etapa 5: Segurança (Privacy & Security by Design)
+   ↓
+Etapa 6: QA/Testes (evidências reais de cobertura)
+   ↓
+Etapa 7: DevOps/Deployment
 \`\`\`
 
 ---

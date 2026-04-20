@@ -192,23 +192,102 @@ export async function developerAgent(specification, triggerType = 'feature') {
 // ─────────────────────────────────────────────────────────────────────────────
 // QA Agent
 // ─────────────────────────────────────────────────────────────────────────────
-export async function qaAgent(code, triggerType = 'feature') {
+
+/**
+ * Formata as evidências reais do QARunner como seção de texto para o prompt.
+ * @param {object} runnerResults
+ * @returns {string}
+ */
+function buildRunnerSection(runnerResults) {
+  if (!runnerResults) return '';
+  const lines = ['## Evidências reais de execução (QA Runner)\n'];
+
+  lines.push(`**Framework detectado:** ${runnerResults.framework || 'não detectado'}`);
+
+  if (runnerResults.errors?.length > 0) {
+    lines.push(`**Erros de execução:** ${runnerResults.errors.join('; ')}`);
+  }
+
+  if (!runnerResults.ran) {
+    lines.push('**Status:** testes não foram executados (ambiente ou framework indisponível)');
+    return lines.join('\n');
+  }
+
+  if (runnerResults.testResults) {
+    const tr = runnerResults.testResults;
+    const status = tr.success ? '✅ passou' : '❌ falhou';
+    lines.push(`**Resultado dos testes:** ${status} — ${tr.passed ?? 0} passaram, ${tr.failed ?? 0} falharam, ${tr.pending ?? 0} pendentes (total: ${tr.total ?? 0}, suites: ${tr.suites ?? 0})`);
+  }
+
+  if (runnerResults.coverage) {
+    const c = runnerResults.coverage;
+    lines.push(`**Cobertura real medida:**`);
+    lines.push(`  - Linhas: ${c.lines}%`);
+    lines.push(`  - Funções: ${c.functions}%`);
+    lines.push(`  - Branches: ${c.branches}%`);
+    lines.push(`  - Statements: ${c.statements}%`);
+  } else {
+    lines.push('**Cobertura:** não foi possível coletar (coverage reporter não configurado ou testes falharam antes)');
+  }
+
+  if (runnerResults.baseline) {
+    lines.push(`**Cobertura baseline (repo antes das mudanças):** ${runnerResults.baseline.overall}%`);
+  }
+
+  if (runnerResults.coverageRegression) {
+    lines.push(`**⚠️ REGRESSÃO DE COBERTURA DETECTADA:** cobertura caiu ${Math.abs(runnerResults.coverageDelta ?? 0).toFixed(1)}% abaixo do baseline`);
+  } else if (runnerResults.coverageDelta !== null && runnerResults.coverageDelta !== undefined) {
+    const sign = runnerResults.coverageDelta >= 0 ? '+' : '';
+    lines.push(`**Delta de cobertura:** ${sign}${runnerResults.coverageDelta}%`);
+  }
+
+  if (runnerResults.lintResults?.ran) {
+    const lr = runnerResults.lintResults;
+    const status = lr.errors === 0 ? '✅ sem erros' : `❌ ${lr.errors} erros`;
+    lines.push(`**Lint (ESLint):** ${status}, ${lr.warnings} avisos em ${lr.files} arquivos`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * QA Agent — analisa e valida o código gerado.
+ *
+ * @param {string|object} input
+ *   - string: código como texto (legacy)
+ *   - object: { code: string, runnerResults: object }
+ * @param {string} triggerType
+ */
+export async function qaAgent(input, triggerType = 'feature') {
   try {
     console.log('🧪 QA Agent: Testing and validating...');
+
+    let codeSection, runnerResults;
+    if (typeof input === 'string') {
+      codeSection = input;
+    } else {
+      codeSection = input?.code ?? JSON.stringify(input);
+      runnerResults = input?.runnerResults ?? null;
+    }
 
     const skillContent = await loadSkill('qa-agent', triggerType);
     const requiredFields = [
       'test_cases', 'issues_found', 'coverage_percentage', 'approved', 'recommendations',
     ];
 
+    const runnerSection = buildRunnerSection(runnerResults);
+    const userContent = runnerSection
+      ? `${runnerSection}\n\n---\n\n## Código submetido\n\n${codeSection}`
+      : `Analise e valide este código:\n\n${codeSection}`;
+
     const response = await withRetry(
       (signal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.3,
-        max_tokens: 2000,
+        max_tokens: 3000,
         messages: [
           { role: 'system', content: skillContent + JSON_SUFFIX },
-          { role: 'user', content: `Teste e valide este código: ${code}` },
+          { role: 'user', content: userContent },
         ],
       }, { signal }),
       { label: 'qaAgent', timeoutMs: 120_000 }
@@ -220,13 +299,30 @@ export async function qaAgent(code, triggerType = 'feature') {
 
     if (!testResult || !validateJSON(testResult, requiredFields)) {
       console.warn('⚠️ QA Agent: JSON inválido, tentando auto-correção...');
-      testResult = await autoCorrectJSON(code, 'qa', requiredFields);
+      testResult = await autoCorrectJSON(userContent, 'qa', requiredFields);
       if (!validateJSON(testResult, requiredFields)) {
         throw new Error('QA Agent: falha ao gerar JSON válido após auto-correção');
       }
     }
 
-    console.log('✅ QA Agent: JSON validado com sucesso');
+    // Se o runner coletou cobertura real, substituir o valor estimado pelo LLM
+    if (runnerResults?.coverage?.overall !== undefined) {
+      testResult.coverage_percentage = runnerResults.coverage.overall;
+      testResult.coverage_real = runnerResults.coverage;
+      testResult.coverage_baseline = runnerResults.baseline ?? null;
+      testResult.coverage_regression = runnerResults.coverageRegression ?? false;
+      testResult.coverage_delta = runnerResults.coverageDelta ?? null;
+    }
+
+    if (runnerResults?.testResults) {
+      testResult.test_execution = runnerResults.testResults;
+    }
+
+    if (runnerResults?.lintResults) {
+      testResult.lint_results = runnerResults.lintResults;
+    }
+
+    console.log(`✅ QA Agent: JSON validado — cobertura: ${testResult.coverage_percentage}%, aprovado: ${testResult.approved}`);
     return testResult;
   } catch (error) {
     console.error('❌ QA Agent Error:', error.message);
