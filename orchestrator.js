@@ -51,7 +51,7 @@ export function loadExecutionsFromDisk() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal pipeline runner — shared by both exported entry points
 // ─────────────────────────────────────────────────────────────────────────────
-async function runPipeline(pipelineId, requirement, executionId, repositoryPath, emitter) {
+async function runPipeline(pipelineId, requirement, executionId, repositoryPath, emitter, triggerType = 'feature') {
   const execution = {
     id: pipelineId,
     requirement,
