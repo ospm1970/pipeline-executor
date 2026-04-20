@@ -204,12 +204,63 @@ export class CodeIntegrator {
   }
 
   /**
-   * Integra código gerado em todos os arquivos principais
+   * Integra código gerado em todos os arquivos principais.
+   * Quando generatedCode contém files[] (novo schema do developer agent),
+   * escreve cada arquivo no caminho correto dentro do repositório.
+   * Caso contrário, usa o comportamento legado de concatenação.
    */
   static async integrateIntoRepository(repoPath, generatedCode, language) {
     try {
       console.log(`🔧 Integrando código gerado no repositório...`);
 
+      // Novo schema: {files: [{path, content}], tests: [{path, content}], ...}
+      const hasFilesSchema = generatedCode &&
+        typeof generatedCode === 'object' &&
+        Array.isArray(generatedCode.files) &&
+        generatedCode.files.length > 0;
+
+      if (hasFilesSchema) {
+        const allEntries = [
+          ...(generatedCode.files || []),
+          ...(generatedCode.tests || []),
+        ];
+
+        let filesWritten = 0;
+        const writtenPaths = [];
+
+        for (const entry of allEntries) {
+          if (!entry.path || typeof entry.content !== 'string') {
+            console.warn(`⚠️ Entrada inválida ignorada: ${JSON.stringify(entry).slice(0, 80)}`);
+            continue;
+          }
+
+          // Normalizar caminho: remover leading slash ou ./
+          const normalizedRelPath = entry.path.replace(/^\.?[/\\]/, '');
+          const targetPath = path.join(repoPath, normalizedRelPath);
+
+          // Criar diretórios necessários
+          const targetDir = path.dirname(targetPath);
+          if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+          }
+
+          fs.writeFileSync(targetPath, entry.content, 'utf-8');
+          filesWritten++;
+          writtenPaths.push(normalizedRelPath);
+          console.log(`✅ Arquivo escrito: ${normalizedRelPath}`);
+        }
+
+        console.log(`✅ Integração concluída: ${filesWritten} arquivo(s) escritos`);
+
+        return {
+          success: true,
+          message: `Código integrado em ${filesWritten} arquivo(s)`,
+          filesModified: filesWritten,
+          files: writtenPaths.map(p => ({ relativePath: p }))
+        };
+      }
+
+      // Schema legado: string ou {code: string}
       const mainFiles = this.detectMainFiles(repoPath);
 
       if (mainFiles.length === 0) {
@@ -223,7 +274,6 @@ export class CodeIntegrator {
 
       let filesModified = 0;
 
-      // Integrar em cada arquivo principal
       for (const file of mainFiles) {
         try {
           const modified = this.integrateCode(file.path, generatedCode, file.language);

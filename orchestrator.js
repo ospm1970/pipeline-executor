@@ -155,7 +155,29 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     execution.logs.push({ timestamp: new Date(), message: 'Starting development stage...', level: 'info' });
 
     const devStart = Date.now();
-    const code = await developerAgent(JSON.stringify(analysis));
+
+    let repoModuleType = 'commonjs';
+    if (repositoryPath) {
+      try {
+        const pkgPath = path.join(repositoryPath, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+          if (pkg.type === 'module') repoModuleType = 'esm';
+        }
+      } catch (_) { /* ignore */ }
+    }
+
+    const devInput = {
+      analysis,
+      repositoryContext: repositoryAnalysis ? {
+        projectType: repositoryAnalysis.type,
+        moduleType: repoModuleType,
+        existingDependencies: repositoryAnalysis.dependencies?.runtime || [],
+        mainFiles: (repositoryAnalysis.mainFiles || []).map(f => f.relativePath || f.path),
+        endpoints: (repositoryAnalysis.endpoints || []).slice(0, 20),
+      } : null,
+    };
+    const code = await developerAgent(JSON.stringify(devInput));
     const devDuration = `${Date.now() - devStart}ms`;
 
     execution.stages.development = { status: 'completed', result: code, duration: devDuration };
