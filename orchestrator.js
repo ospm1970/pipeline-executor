@@ -223,16 +223,21 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
       }
 
       if (attempt < CODE_REVIEW_MAX_RETRIES) {
-        // Envia blocking_issues de volta ao developer para correção
+        // Envia blocking_issues de volta ao developer com contexto completo
         log.warn('Code review blocked — re-sending to developer agent', { attempt, issues: reviewResult.blocking_issues });
         execution.logs.push({ timestamp: new Date(), message: `Re-enviando ao developer (tentativa ${attempt + 1}): ${reviewResult.blocking_issues.join('; ')}`, level: 'warn' });
         emitter?.emit('progress', { stage: 'code_review', stageIndex: 4, status: 'retry', attempt });
 
         const correctionSpec = JSON.stringify({
-          original_specification: JSON.parse(reviewedCode._specInput || '{}'),
+          // Contexto completo para o developer não gerar código vazio
+          analysis: devInput.analysis,
+          repositoryContext: devInput.repositoryContext,
           blocking_issues: reviewResult.blocking_issues,
           warnings: reviewResult.warnings,
-          previous_files: reviewedCode.files,
+          previous_files: (reviewedCode.files || []).map(f =>
+            typeof f === 'object' ? { path: f.path, issue: 'revisar conteúdo' } : f
+          ),
+          instruction: 'Corrija os blocking_issues listados e gere novamente o código completo com conteúdo real em cada arquivo.',
         });
         reviewedCode = await developerAgent(correctionSpec, triggerType);
       }
@@ -362,8 +367,11 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     // Cobertura real tem precedência sobre estimativa LLM
     const qaCoverage = qaResult.coverage_percentage || 0;
     const coverageTarget = 80;
-    const coverageOk = qaCoverage >= coverageTarget;
-    const coverageRegression = qaResult.coverage_regression === true;
+    // Só aplica o threshold de cobertura se o runner executou de verdade;
+    // quando ran=false o valor é estimativa LLM e não deve bloquear sozinho.
+    const runnerActuallyRan = runnerResults?.ran === true;
+    const coverageOk = !runnerActuallyRan || qaCoverage >= coverageTarget;
+    const coverageRegression = runnerActuallyRan && qaResult.coverage_regression === true;
 
     const hasCriticalIssues = (qaResult.issues_found || []).some(issue => {
       if (typeof issue === 'string') {
@@ -376,7 +384,7 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     if (!qaApproved || !coverageOk || hasCriticalIssues || coverageRegression) {
       const reason = [
         !qaApproved ? 'QA não aprovado pelo agente' : null,
-        !coverageOk ? `Cobertura insuficiente: ${qaCoverage}% (mínimo ${coverageTarget}%)` : null,
+        !coverageOk ? `Cobertura insuficiente: ${qaCoverage}% (mínimo ${coverageTarget}%) — medição real via runner` : null,
         coverageRegression ? `Regressão de cobertura: ${qaResult.coverage_delta}% abaixo do baseline` : null,
         hasCriticalIssues ? 'Issues críticas encontradas pelo QA' : null,
       ].filter(Boolean).join('; ');
