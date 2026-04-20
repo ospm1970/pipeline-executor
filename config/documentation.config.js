@@ -11,8 +11,9 @@ export const documentationConfig = {
     'analysis': { index: 1, name: 'analise', label: '📊 Análise' },
     'ux_design': { index: 2, name: 'design-ux', label: '🎨 Design UI/UX' },
     'development': { index: 3, name: 'desenvolvimento', label: '💻 Desenvolvimento' },
-    'qa': { index: 4, name: 'qa-testes', label: '🧪 QA/Testes' },
-    'deployment': { index: 5, name: 'devops', label: '🚀 DevOps' }
+    'code_review': { index: 4, name: 'code-review', label: '🔎 Code Review' },
+    'qa': { index: 5, name: 'qa-testes', label: '🧪 QA/Testes' },
+    'deployment': { index: 6, name: 'devops', label: '🚀 DevOps' }
   },
   generation: {
     model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
