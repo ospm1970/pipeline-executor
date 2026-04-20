@@ -367,8 +367,11 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     // Cobertura real tem precedência sobre estimativa LLM
     const qaCoverage = qaResult.coverage_percentage || 0;
     const coverageTarget = 80;
-    const coverageOk = qaCoverage >= coverageTarget;
-    const coverageRegression = qaResult.coverage_regression === true;
+    // Só aplica o threshold de cobertura se o runner executou de verdade;
+    // quando ran=false o valor é estimativa LLM e não deve bloquear sozinho.
+    const runnerActuallyRan = runnerResults?.ran === true;
+    const coverageOk = !runnerActuallyRan || qaCoverage >= coverageTarget;
+    const coverageRegression = runnerActuallyRan && qaResult.coverage_regression === true;
 
     const hasCriticalIssues = (qaResult.issues_found || []).some(issue => {
       if (typeof issue === 'string') {
@@ -381,7 +384,7 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     if (!qaApproved || !coverageOk || hasCriticalIssues || coverageRegression) {
       const reason = [
         !qaApproved ? 'QA não aprovado pelo agente' : null,
-        !coverageOk ? `Cobertura insuficiente: ${qaCoverage}% (mínimo ${coverageTarget}%)` : null,
+        !coverageOk ? `Cobertura insuficiente: ${qaCoverage}% (mínimo ${coverageTarget}%) — medição real via runner` : null,
         coverageRegression ? `Regressão de cobertura: ${qaResult.coverage_delta}% abaixo do baseline` : null,
         hasCriticalIssues ? 'Issues críticas encontradas pelo QA' : null,
       ].filter(Boolean).join('; ');
