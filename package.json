@@ -1,7 +1,7 @@
 {
-  "name": "manus-devagents-mvp",
+  "name": "pipeline-executor",
   "version": "1.0.0",
-  "description": "MVP of Manus DevAgents - AI-powered development pipeline",
+  "description": "Pipeline de desenvolvimento automatizado orientado por IA — Casarcom",
   "main": "server.js",
   "type": "module",
   "scripts": {

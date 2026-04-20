@@ -1,9 +1,9 @@
-# Manus DevAgents MVP - Script de Inicialização (PowerShell)
+# Pipeline Executor — Script de Inicialização (PowerShell)
 # Este script inicia a aplicação automaticamente
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Manus DevAgents MVP - Inicializando" -ForegroundColor Cyan
+Write-Host "  Pipeline Executor — Inicializando" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
