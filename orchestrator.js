@@ -195,9 +195,10 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     const qaApproved = qaResult.approved === true;
     const qaCoverage = qaResult.coverage_percentage || 0;
     const coverageOk = qaCoverage >= 80;
-    const hasCriticalIssues = (qaResult.issues_found || []).some(issue =>
-      issue.toLowerCase().includes('critical') || issue.toLowerCase().includes('crítico')
-    );
+    const hasCriticalIssues = (qaResult.issues_found || []).some(issue => {
+      const text = (typeof issue === 'string' ? issue : JSON.stringify(issue)).toLowerCase();
+      return text.includes('critical') || text.includes('crítico');
+    });
 
     if (!qaApproved || !coverageOk || hasCriticalIssues) {
       const reason = [
@@ -278,6 +279,7 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
 export function startPipeline(requirement, executionId = null, repositoryPath = null) {
   const pipelineId = `pipeline-${Date.now()}`;
   const emitter = new EventEmitter();
+  emitter.on('error', () => {});
   pipelineEmitters.set(pipelineId, emitter);
 
   runPipeline(pipelineId, requirement, executionId, repositoryPath, emitter)
@@ -294,6 +296,7 @@ export function startPipeline(requirement, executionId = null, repositoryPath = 
 export async function executePipeline(requirement, executionId = null, repositoryPath = null) {
   const pipelineId = `pipeline-${Date.now()}`;
   const emitter = new EventEmitter();
+  emitter.on('error', () => {});
   pipelineEmitters.set(pipelineId, emitter);
   try {
     return await runPipeline(pipelineId, requirement, executionId, repositoryPath, emitter);

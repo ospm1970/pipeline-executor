@@ -115,19 +115,20 @@ export async function analystAgent(requirement, triggerType = 'feature') {
       (signal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.3,
-        max_tokens: 1500,
+        max_tokens: 2000,
         messages: [
           { role: 'system', content: skillContent + JSON_SUFFIX },
           { role: 'user', content: `Analise este requisito: ${requirement}` },
         ],
       }, { signal }),
-      { label: 'analystAgent' }
+      { label: 'analystAgent', timeoutMs: 120_000 }
     );
 
     logTokens('analystAgent', response.usage);
-    let analysis = extractJSON(response.choices[0].message.content);
+    let analysis = null;
+    try { analysis = extractJSON(response.choices[0].message.content); } catch { /* fall through to autoCorrect */ }
 
-    if (!validateJSON(analysis, requiredFields)) {
+    if (!analysis || !validateJSON(analysis, requiredFields)) {
       console.warn('⚠️ Analyst Agent: JSON inválido, tentando auto-correção...');
       analysis = await autoCorrectJSON(requirement, 'analyst', requiredFields);
       if (!validateJSON(analysis, requiredFields)) {
@@ -163,13 +164,14 @@ export async function developerAgent(specification, triggerType = 'feature') {
           { role: 'user', content: `Gere código para esta especificação: ${specification}` },
         ],
       }, { signal }),
-      { label: 'developerAgent' }
+      { label: 'developerAgent', timeoutMs: 120_000 }
     );
 
     logTokens('developerAgent', response.usage);
-    let code = extractJSON(response.choices[0].message.content);
+    let code = null;
+    try { code = extractJSON(response.choices[0].message.content); } catch { /* fall through to autoCorrect */ }
 
-    if (!validateJSON(code, requiredFields)) {
+    if (!code || !validateJSON(code, requiredFields)) {
       console.warn('⚠️ Developer Agent: JSON inválido, tentando auto-correção...');
       code = await autoCorrectJSON(specification, 'developer', requiredFields);
       if (!validateJSON(code, requiredFields)) {
@@ -201,19 +203,20 @@ export async function qaAgent(code, triggerType = 'feature') {
       (signal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.3,
-        max_tokens: 1500,
+        max_tokens: 2000,
         messages: [
           { role: 'system', content: skillContent + JSON_SUFFIX },
           { role: 'user', content: `Teste e valide este código: ${code}` },
         ],
       }, { signal }),
-      { label: 'qaAgent' }
+      { label: 'qaAgent', timeoutMs: 120_000 }
     );
 
     logTokens('qaAgent', response.usage);
-    let testResult = extractJSON(response.choices[0].message.content);
+    let testResult = null;
+    try { testResult = extractJSON(response.choices[0].message.content); } catch { /* fall through to autoCorrect */ }
 
-    if (!validateJSON(testResult, requiredFields)) {
+    if (!testResult || !validateJSON(testResult, requiredFields)) {
       console.warn('⚠️ QA Agent: JSON inválido, tentando auto-correção...');
       testResult = await autoCorrectJSON(code, 'qa', requiredFields);
       if (!validateJSON(testResult, requiredFields)) {
@@ -246,19 +249,20 @@ export async function devopsAgent(code, triggerType = 'feature') {
       (signal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.3,
-        max_tokens: 1500,
+        max_tokens: 2000,
         messages: [
           { role: 'system', content: skillContent + JSON_SUFFIX },
           { role: 'user', content: `Planeje o deploy para este código: ${code}` },
         ],
       }, { signal }),
-      { label: 'devopsAgent' }
+      { label: 'devopsAgent', timeoutMs: 120_000 }
     );
 
     logTokens('devopsAgent', response.usage);
-    let deployment = extractJSON(response.choices[0].message.content);
+    let deployment = null;
+    try { deployment = extractJSON(response.choices[0].message.content); } catch { /* fall through to autoCorrect */ }
 
-    if (!validateJSON(deployment, requiredFields)) {
+    if (!deployment || !validateJSON(deployment, requiredFields)) {
       console.warn('⚠️ DevOps Agent: JSON inválido, tentando auto-correção...');
       deployment = await autoCorrectJSON(code, 'devops', requiredFields);
       if (!validateJSON(deployment, requiredFields)) {

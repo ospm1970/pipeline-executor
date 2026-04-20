@@ -347,7 +347,7 @@ Return as JSON:
           temperature: 0.7,
           max_tokens: 2000,
         }, { signal }),
-        { label: 'uiuxAgent' }
+        { label: 'uiuxAgent', timeoutMs: 120_000 }
       );
 
       logger.info('Token usage', { agent: 'uiuxAgent', prompt_tokens: response.usage?.prompt_tokens, completion_tokens: response.usage?.completion_tokens, total_tokens: response.usage?.total_tokens });
