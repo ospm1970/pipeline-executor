@@ -74,7 +74,7 @@ Gere um documento Markdown profissional e detalhado que explique o que foi execu
           temperature: 0.7,
           max_tokens: 2000,
         }, { signal }),
-        { label: 'documenterAgent' }
+        { label: 'documenterAgent', timeoutMs: 120_000 }
       );
 
       logger.info('Token usage', { agent: 'documenterAgent', prompt_tokens: response.usage?.prompt_tokens, completion_tokens: response.usage?.completion_tokens, total_tokens: response.usage?.total_tokens });

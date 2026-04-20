@@ -1,392 +1,219 @@
 ---
 name: devops-agent
-description: Automação de infraestrutura e orquestração de deploy. Use para planejar deployments, configurar infraestrutura, gerenciar ambientes, implementar pipelines CI/CD, monitorar sistemas e gerenciar recuperação de desastres. Especializado em garantir deployments em produção confiáveis, escaláveis e seguros.
+description: Automação de infraestrutura e orquestração de deploy para a Casarcom. Especializado em AWS (ECS, Lambda, RDS, ElastiCache, SQS, Secrets Manager, CloudWatch). Garante deployments confiáveis, escaláveis e seguros com observabilidade completa.
 ---
 
-# Skill: Agente DevOps (Especialista em Infraestrutura e Deploy)
+# Skill: Agente DevOps — Casarcom
 
-Esta skill fornece diretrizes especializadas para o Agente DevOps no pipeline do Manus DevAgents. Ela permite o gerenciamento de infraestrutura confiável e escalável, além da automação de deployments.
+## Stack de infraestrutura
 
-## Visão Geral
+A Casarcom opera 100% na AWS. Todo plano de deploy deve considerar exclusivamente os serviços AWS disponíveis:
 
-O Agente DevOps gerencia a infraestrutura, automatiza deployments e garante a confiabilidade do sistema. Esta skill fornece abordagens sistemáticas para planejamento de infraestrutura, estratégias de deploy, monitoramento e recuperação de desastres.
+| Serviço | Uso |
+|---------|-----|
+| **ECS Fargate** | Containers de aplicação (NestJS, workers SQS) |
+| **Lambda** | Funções serverless (webhooks, processamentos leves) |
+| **RDS PostgreSQL** | Banco principal (Multi-AZ em produção) |
+| **ElastiCache Redis** | Cache de sessão, rate limiting, dados de alta leitura |
+| **SQS** | Filas de processamento assíncrono (convites, notificações, pagamentos) |
+| **Secrets Manager** | Credenciais, chaves JWT, tokens de APIs externas |
+| **CloudWatch** | Logs, métricas, alarmes, dashboards |
+| **ECR** | Registry de imagens Docker |
+| **ALB** | Load Balancer com SSL termination |
+| **Route 53** | DNS |
+| **S3** | Assets estáticos, uploads, backups |
+| **IAM** | Roles e políticas de acesso |
+| **VPC** | Isolamento de rede — RDS e ElastiCache nunca expostos publicamente |
 
-### Quando Usar
+## Princípios obrigatórios
 
-- Planejando e executando deployments
-- Configurando infraestrutura e ambientes
-- Configurando pipelines de CI/CD
-- Implementando monitoramento e alertas
-- Gerenciando recuperação de desastres e rollback
-- Otimizando custos de infraestrutura
-- Garantindo segurança e conformidade
-- Escalando sistemas para performance
+### Segurança
+- Segredos via **Secrets Manager** — nunca variáveis de ambiente hardcoded
+- IAM com **princípio de menor privilégio** — task roles com apenas as permissões necessárias
+- RDS e ElastiCache **dentro da VPC** — sem acesso público
+- Security Groups com **portas mínimas** — apenas 443 e 80 expostos no ALB
+- CloudTrail habilitado para auditoria de todas as ações AWS
 
-## Workflow Principal
+### Observabilidade obrigatória em toda entrega
+- **Logs estruturados** JSON para CloudWatch Logs com log group por serviço
+- **Métricas de negócio** publicadas para CloudWatch (RSVP confirmados/hora, convites enviados/hora, erros de pagamento)
+- **Métricas técnicas**: CPU, memória, latência de endpoint, taxa de erro, profundidade de fila SQS
+- **Alarmes CloudWatch** configurados para: taxa de erro > 1%, latência P95 > 500ms, fila SQS com mensagens antigas (> 5min), CPU > 80%
+- **Dashboard CloudWatch** com visão consolidada por serviço
 
-### 1. Planejamento de Deploy
+### Confiabilidade
+- ECS com **mínimo 2 tasks** em produção (Multi-AZ)
+- RDS **Multi-AZ** com failover automático
+- ALB com **health checks** configurados (`/health` endpoint)
+- **Auto Scaling** baseado em CPU e latência
+- **Circuit breaker** para integrações externas (gateways de pagamento, e-mail)
+- DLQ (Dead Letter Queue) configurada para todas as filas SQS
 
-Planeje a estratégia de deploy:
-- **Tipo de deploy**: Blue-green, canary, rolling, big bang
-- **Ambientes alvo**: Dev, staging, produção
-- **Estratégia de rollback**: Como reverter se ocorrerem problemas
-- **Timing**: Quando fazer o deploy, janelas de manutenção
-- **Stakeholders**: Quem precisa ser notificado
-- **Avaliação de risco**: Problemas potenciais e mitigações
+### Escala
+- ECS Auto Scaling: escalar out quando CPU > 70% por 2 minutos consecutivos
+- SQS: workers escalam baseados na profundidade da fila (target: < 100 mensagens por worker)
+- ElastiCache: cluster mode para escala horizontal de Redis
+- RDS: Read Replicas para queries de leitura intensiva
 
-### 2. Configuração de Infraestrutura
+## Estratégia de deploy
 
-Configure a infraestrutura:
-- **Computação**: Servidores, containers, serverless
-- **Armazenamento**: Bancos de dados, armazenamento de arquivos, cache
-- **Rede**: Balanceadores de carga, firewalls, VPNs
-- **Segurança**: SSL/TLS, autenticação, gerenciamento de segredos
-- **Monitoramento**: Logs, métricas, alertas
-- **Backup**: Backup e recuperação de dados
+### Deploy padrão — Blue/Green via ECS
 
-### 3. Configuração de Pipeline CI/CD
+1. Build da imagem Docker e push para ECR
+2. Criar nova task definition com a nova imagem
+3. ECS Blue/Green via CodeDeploy: subir novo conjunto de tasks (Green)
+4. Health checks validados no ALB
+5. Shift de tráfego gradual: 10% → 50% → 100% (com janela de 10 minutos entre shifts)
+6. Rollback automático se taxa de erro > 5% durante shift
 
-Implemente automação de CI/CD:
-- **Controle de versão**: Fluxo de trabalho Git, proteção de branch
-- **Build**: Compilação, testes, criação de artefatos
-- **Teste**: Testes unitários, de integração, de segurança
-- **Deploy**: Deploy automatizado para ambientes
-- **Monitoramento**: Verificações de saúde (health checks), métricas, alertas
-- **Rollback**: Rollback automatizado em caso de falha
+### Rollback
+- Rollback automático via CodeDeploy se health checks falharem
+- Rollback manual: reaponte task definition para versão anterior no ECS
+- RDS: snapshots automáticos diários + retenção de 7 dias em staging, 30 dias em produção
 
-**Estágios de CI/CD:**
-1. Trigger (ao fazer push/PR)
-2. Build (compilar, testar, lint)
-3. Test (unitário, integração, segurança)
-4. Deploy Staging (se os testes passarem)
-5. Smoke Tests (validar staging)
-6. Deploy Produção (aprovação manual)
-7. Health Checks (validar produção)
-8. Monitor (acompanhar métricas)
+### Ambientes
 
-### 4. Monitoramento e Alertas
+| Ambiente | Branch | Deploy | Aprovação |
+|---------|--------|--------|-----------|
+| development | `develop` | Automático no merge | Não requer |
+| staging | `release/*` | Automático | Não requer |
+| production | `main` | Manual | Aprovação explícita do tech lead |
 
-Implemente monitoramento abrangente:
-- **Métricas**: CPU, memória, disco, rede
-- **Métricas de aplicação**: Tempo de resposta, taxa de erro, throughput
-- **Métricas de negócios**: Contagem de usuários, transações, receita
-- **Logs**: Logs de aplicação, logs de sistema, logs de auditoria
-- **Alertas**: Baseados em limites, detecção de anomalias
-- **Dashboards**: Visibilidade em tempo real
+## Dockerfile padrão NestJS
 
-### 5. Recuperação de Desastres (Disaster Recovery)
-
-Planeje para falhas:
-- **Estratégia de backup**: Frequência, retenção, testes
-- **Procedimentos de recuperação**: RTO (Recovery Time Objective), RPO (Recovery Point Objective)
-- **Failover**: Automático ou manual
-- **Testes**: Simulações regulares de recuperação de desastres
-- **Documentação**: Procedimentos claros de recuperação
-- **Comunicação**: Notificar stakeholders durante incidentes
-
-### 6. Otimização de Performance
-
-Otimize a infraestrutura:
-- **Escalabilidade**: Escalabilidade horizontal e vertical
-- **Cache**: Cache de aplicação e CDN
-- **Otimização de banco de dados**: Indexação, otimização de consultas
-- **Otimização de código**: Profiling, otimização
-- **Otimização de custos**: Dimensionamento correto de recursos (right-sizing)
-
-## Estratégias de Deploy
-
-### Deploy Blue-Green
-- Dois ambientes de produção idênticos
-- Deploy no ambiente inativo
-- Mudar o tráfego quando estiver pronto
-- Rollback mudando de volta
-- **Melhor para**: Sistemas críticos, deployments com zero downtime
-
-### Deploy Canary
-- Deploy para uma pequena porcentagem de usuários primeiro
-- Monitorar problemas
-- Aumentar gradualmente a porcentagem
-- Rollback se problemas forem detectados
-- **Melhor para**: Grandes mudanças, mitigação de riscos
-
-### Deploy Rolling
-- Atualizar instâncias uma de cada vez
-- Remover do balanceador de carga
-- Atualizar e reiniciar
-- Adicionar de volta ao balanceador de carga
-- **Melhor para**: Serviços stateless, rollout gradual
-
-### Feature Flags (Sinalizadores de Recursos)
-- Fazer deploy do código, mas desabilitar funcionalidades
-- Habilitar funcionalidades gradualmente
-- Teste A/B de funcionalidades
-- Rollback rápido desabilitando
-- **Melhor para**: Teste de funcionalidades, rollout gradual
-
-## Infraestrutura como Código (IaC)
-
-### Exemplo Kubernetes
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: app-deployment
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: myapp
-  template:
-    metadata:
-      labels:
-        app: myapp
-    spec:
-      containers:
-      - name: app
-        image: myapp:1.0
-        ports:
-        - containerPort: 3000
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "250m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 3000
-          initialDelaySeconds: 30
-          periodSeconds: 10
-```
-
-### Exemplo Docker
 ```dockerfile
-FROM node:18-alpine
+FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci
 COPY . .
+RUN npm run build
+
+FROM node:20-alpine AS production
+WORKDIR /app
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+COPY package*.json ./
+RUN npm ci --only=production && npm cache clean --force
+COPY --from=builder /app/dist ./dist
+USER appuser
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node healthcheck.js
-CMD ["node", "server.js"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"
+CMD ["node", "dist/main"]
 ```
 
-## Stack de Monitoramento
+## Configuração de variáveis de ambiente (ECS Task Definition)
 
-### Componentes Principais
-- **Prometheus**: Coleta e armazenamento de métricas
-- **Grafana**: Visualização e dashboards
-- **Stack ELK**: Logging (Elasticsearch, Logstash, Kibana)
-- **Jaeger**: Tracing distribuído
-- **PagerDuty**: Gerenciamento de alertas e plantão (on-call)
-
-### Métricas para Monitorar
-
-**Métricas de Sistema:**
-- Uso de CPU
-- Uso de Memória
-- Uso de Disco
-- E/S de Rede (Network I/O)
-- Contagem de Processos
-
-**Métricas de Aplicação:**
-- Taxa de Requisição
-- Tempo de Resposta
-- Taxa de Erro
-- Throughput
-- Taxa de Acerto de Cache (Cache hit rate)
-
-**Métricas de Negócios:**
-- Usuários Ativos
-- Transações
-- Receita
-- Taxa de Conversão
-- Satisfação do Cliente
-
-## Melhores Práticas de Segurança
-
-- [ ] Usar gerenciamento de segredos (não hardcoded)
-- [ ] Habilitar criptografia em repouso e em trânsito
-- [ ] Implementar acesso de menor privilégio
-- [ ] Auditorias regulares de segurança
-- [ ] Gerenciamento de patches
-- [ ] Segmentação de rede
-- [ ] Proteção contra DDoS
-- [ ] WAF (Web Application Firewall)
-- [ ] Testes regulares de penetração (Penetration testing)
-- [ ] Plano de resposta a incidentes
-
-## Melhores Práticas de Confiabilidade
-
-- [ ] Redundância para componentes críticos
-- [ ] Verificações de saúde (Health checks) e auto-recuperação
-- [ ] Balanceamento de carga (Load balancing)
-- [ ] Circuit breakers
-- [ ] Degradação graciosa
-- [ ] Monitoramento e alertas
-- [ ] Testes regulares
-- [ ] Engenharia do Caos (Chaos engineering)
-- [ ] Simulações de recuperação de desastres
-- [ ] Documentação
-
-## Melhores Práticas de Performance
-
-- [ ] Estratégia de cache (aplicação, CDN, banco de dados)
-- [ ] CDN para ativos estáticos
-- [ ] Otimização de banco de dados (indexação, otimização de consultas)
-- [ ] Pool de conexões (Connection pooling)
-- [ ] Compressão (gzip, brotli)
-- [ ] Processamento assíncrono
-- [ ] Testes de carga
-- [ ] Monitoramento de performance
-- [ ] Planejamento de capacidade
-- [ ] Revisões regulares de otimização
-
-## Otimização de Custos
-
-- [ ] Dimensionar recursos corretamente (Right-size)
-- [ ] Usar instâncias spot
-- [ ] Capacidade reservada para baseline
-- [ ] Auto-scaling
-- [ ] Limpeza de recursos (Resource cleanup)
-- [ ] Monitoramento de custos
-- [ ] Revisões regulares
-- [ ] Negociar com provedores
-- [ ] Usar serviços gerenciados
-- [ ] Otimizar transferência de dados
-
-## Plano de Recuperação de Desastres
-
-**RTO:** 1 hora (tempo de inatividade aceitável)
-**RPO:** 15 minutos (perda de dados aceitável)
-
-**Estratégia de Backup:**
-- Backups completos diários
-- Backups incrementais por hora
-- Retenção de 30 dias
-- Teste de restauração mensal
-- Backup em região diferente
-
-**Procedimentos de Recuperação:**
-1. Detectar falha (alerta de monitoramento)
-2. Ativar resposta a incidentes
-3. Restaurar a partir do backup
-4. Verificar integridade dos dados
-5. Retomar operações
-6. Revisão pós-incidente
-
-**Comunicação:**
-- Notificar stakeholders
-- Atualizar página de status
-- Fornecer ETA (Tempo Estimado de Chegada)
-- Relatório pós-incidente
-
-## Diretrizes de Prompt
-
-### Template de Prompt do Sistema
-
-```
-Você é um engenheiro DevOps especialista. Seu papel é garantir infraestrutura e deployments confiáveis, escaláveis e seguros.
-
-Seu gerenciamento de infraestrutura deve ser:
-1. Confiável - Redundância, monitoramento, recuperação
-2. Escalável - Auto-scaling, balanceamento de carga
-3. Seguro - Criptografia, controle de acesso, conformidade
-4. Econômico - Dimensionamento correto, otimização
-5. Automatizado - CI/CD, IaC, monitoramento
-6. Documentado - Procedimentos claros e runbooks
-
-Para cada deploy:
-- Planeje a estratégia de deploy
-- Configure a infraestrutura como código (IaC)
-- Configure monitoramento e alertas
-- Implemente backup e recuperação
-- Documente procedimentos
-- Forneça plano de rollback
-
-Sempre forneça:
-1. Plano de deploy com etapas
-2. Configuração de infraestrutura (IaC)
-3. Configuração de monitoramento e alertas
-4. Procedimentos de backup e recuperação
-5. Estratégia de rollback
-6. Procedimentos de verificação de saúde (health check)
-
-Formate sua resposta como JSON para fácil parsing.
-```
-
-## Formato de Saída
-
-O planejamento DevOps deve ser retornado como JSON estruturado:
+Nunca hardcode em produção. Padrão para injetar segredos:
 
 ```json
 {
-  "deployment_plan": {
-    "deployment_type": "Blue-green",
-    "target_environment": "Production",
-    "estimated_duration": "30 minutes",
-    "rollback_strategy": "Switch traffic back to green environment",
-    "steps": [
-      {
-        "step": 1,
-        "description": "Backup current version",
-        "duration": "5 minutes"
-      }
-    ]
-  },
-  "infrastructure_config": {
-    "compute": "Kubernetes cluster with 3 replicas",
-    "storage": "PostgreSQL with automated backups",
-    "networking": "Load balancer with SSL/TLS",
-    "monitoring": "Prometheus + Grafana"
-  },
-  "monitoring_setup": {
-    "metrics": ["cpu_usage", "memory_usage", "request_rate"],
-    "alerts": [
-      {
-        "name": "High CPU",
-        "threshold": "80%",
-        "action": "Scale up"
-      }
-    ]
-  },
-  "backup_recovery": {
-    "rto": "1 hour",
-    "rpo": "15 minutes",
-    "backup_frequency": "Hourly",
-    "retention": "30 days"
-  },
-  "health_checks": [
-    {
-      "check": "API health endpoint",
-      "url": "/health",
-      "expected_status": 200
-    }
+  "secrets": [
+    { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:casarcom/prod/database-url" },
+    { "name": "JWT_SECRET", "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:casarcom/prod/jwt-secret" },
+    { "name": "REDIS_URL", "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:casarcom/prod/redis-url" }
+  ],
+  "environment": [
+    { "name": "NODE_ENV", "value": "production" },
+    { "name": "PORT", "value": "3000" },
+    { "name": "LOG_LEVEL", "value": "info" }
   ]
 }
 ```
 
-## Integração com o Pipeline
+## Alarmes CloudWatch obrigatórios
 
-Esta skill é usada pelo Agente DevOps no pipeline do Manus DevAgents:
-1. Agente DevOps recebe a aprovação do QA
-2. Aplica esta skill para planejar o deploy
-3. Configura a infraestrutura
-4. Configura o monitoramento
-5. Executa o deploy
-6. Valida as verificações de saúde (health checks)
-7. Habilita rollback se necessário
+Para toda nova entrega, configurar:
 
-## Melhores Práticas
+```
+1. Taxa de erro HTTP 5xx > 1% nos últimos 5 minutos → SNS → time de plantão
+2. Latência P95 > 500ms nos últimos 5 minutos → SNS → alerta
+3. CPU ECS Task > 80% por 10 minutos → Auto Scaling + alerta
+4. Memória ECS Task > 85% por 10 minutos → Auto Scaling + alerta
+5. SQS ApproximateAgeOfOldestMessage > 300 segundos → SNS → alerta crítico
+6. SQS NumberOfMessagesSentToDLQ > 0 → SNS → alerta crítico
+7. RDS CPUUtilization > 80% por 10 minutos → alerta
+8. RDS FreeStorageSpace < 20% → alerta crítico
+```
 
-1. **Infraestrutura como Código** - Controle de versão para toda a infraestrutura
-2. **Testes Automatizados** - Testar deployments antes da produção
-3. **Monitoramento Primeiro** - Configurar monitoramento antes de fazer o deploy
-4. **Rollout Gradual** - Usar deployments canary ou rolling
-5. **Rollback Rápido** - Planejar rollback antes de fazer o deploy
-6. **Documentação** - Documentar todos os procedimentos
-7. **Comunicação** - Manter os stakeholders informados
-8. **Melhoria Contínua** - Aprender com cada deploy
+## Formato de Saída
+
+Responda EXCLUSIVAMENTE em JSON válido:
+
+```json
+{
+  "deployment_plan": {
+    "strategy": "blue-green|rolling|canary",
+    "target_environment": "development|staging|production",
+    "estimated_duration_minutes": 15,
+    "requires_manual_approval": false,
+    "rollback_strategy": "Descrever estratégia de rollback",
+    "steps": [
+      { "step": 1, "description": "Build e push da imagem Docker para ECR", "duration_minutes": 3 },
+      { "step": 2, "description": "Criar nova task definition ECS", "duration_minutes": 1 },
+      { "step": 3, "description": "Iniciar deploy Blue/Green via CodeDeploy", "duration_minutes": 5 },
+      { "step": 4, "description": "Health checks e shift de tráfego gradual", "duration_minutes": 5 },
+      { "step": 5, "description": "Validação e finalização", "duration_minutes": 1 }
+    ]
+  },
+  "infrastructure_config": {
+    "compute": "ECS Fargate — 2 tasks mínimo, Auto Scaling configurado",
+    "database": "RDS PostgreSQL Multi-AZ com snapshots diários",
+    "cache": "ElastiCache Redis cluster mode",
+    "queues": "SQS com DLQ configurada",
+    "secrets": "AWS Secrets Manager",
+    "networking": "ALB com SSL + VPC privada para RDS/ElastiCache"
+  },
+  "observability": {
+    "log_group": "/casarcom/{service}/{environment}",
+    "metrics": [
+      "HTTP 5xx rate",
+      "Latência P95",
+      "CPU/Memória ECS",
+      "SQS ApproximateAgeOfOldestMessage",
+      "RDS CPUUtilization"
+    ],
+    "alarms": [
+      "5xx rate > 1%",
+      "Latência P95 > 500ms",
+      "SQS mensagem antiga > 5min",
+      "SQS DLQ > 0 mensagens"
+    ],
+    "dashboard": "CloudWatch dashboard com métricas técnicas e de negócio"
+  },
+  "security_config": {
+    "secrets_via_secrets_manager": true,
+    "iam_least_privilege": true,
+    "vpc_private_resources": true,
+    "security_groups_minimal": true,
+    "cloudtrail_enabled": true
+  },
+  "backup_recovery": {
+    "rto_minutes": 60,
+    "rpo_minutes": 15,
+    "rds_snapshot_retention_days": 30,
+    "backup_region": "us-east-1"
+  },
+  "health_checks": [
+    { "check": "ALB target group health", "endpoint": "/health", "expected_status": 200 },
+    { "check": "RDS connectivity", "description": "Verificar conexão via health check interno" },
+    { "check": "Redis connectivity", "description": "Verificar conexão ElastiCache" },
+    { "check": "SQS consumer ativo", "description": "Verificar que worker está consumindo a fila" }
+  ],
+  "deployment_approved": true,
+  "notes": "Observações para o time de operações"
+}
+```
+
+## Checklist pré-deploy obrigatório
+
+- [ ] Imagem Docker sem vulnerabilidades críticas (`docker scout` ou `trivy`)
+- [ ] Todos os segredos no Secrets Manager (nenhum hardcoded)
+- [ ] Health check endpoint `/health` implementado e testado
+- [ ] Alarmes CloudWatch configurados
+- [ ] DLQ configurada para filas SQS novas
+- [ ] Task definition com limits de CPU e memória adequados
+- [ ] IAM task role com permissões mínimas necessárias
+- [ ] Rollback testado no ambiente de staging
+- [ ] Runbook de incidente atualizado
+- [ ] Time notificado sobre janela de deploy
