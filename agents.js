@@ -64,12 +64,12 @@ function extractJSON(content) {
   }
 }
 
-async function autoCorrectJSON(requirement, agentType, requiredFields) {
+async function autoCorrectJSON(requirement, agentType, requiredFields, maxTokens = 4000) {
   const response = await withRetry(
     (signal) => openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
       temperature: 0.1,
-      max_tokens: 4000,
+      max_tokens: maxTokens,
       messages: [
         {
           role: 'system',
@@ -160,7 +160,7 @@ export async function developerAgent(specification, triggerType = 'feature') {
       (signal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.5,
-        max_tokens: 4000,
+        max_tokens: 16000,
         messages: [
           { role: 'system', content: skillContent + JSON_SUFFIX },
           { role: 'user', content: `Gere código para esta especificação: ${specification}` },
@@ -185,7 +185,7 @@ export async function developerAgent(specification, triggerType = 'feature') {
 
     if (!code || !validateJSON(code, requiredFields)) {
       console.warn('⚠️ Developer Agent: JSON inválido, tentando auto-correção...');
-      code = await autoCorrectJSON(specification, 'developer', requiredFields);
+      code = await autoCorrectJSON(specification, 'developer', requiredFields, 16000);
       if (!validateJSON(code, requiredFields)) {
         throw new Error('Developer Agent: falha ao gerar JSON válido após auto-correção');
       }
