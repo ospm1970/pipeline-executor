@@ -1,4 +1,5 @@
 import { analystAgent, developerAgent, qaAgent, devopsAgent } from './agents.js';
+import { codeReviewAgent, buildReviewInput } from './agents-code-review.js';
 import { UIUXAgentWithSkill } from './agents-ux.js';
 import { SpecAgentWithSkill } from './agents-spec.js';
 import DocumenterAgentWithSkill from './agents-documenter.js';
@@ -170,18 +171,85 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
       log.warn('Documentation generation failed for development', { error: docError.message });
     }
 
-    // ── Stage 4: QA ─────────────────────────────────────────────────────────
-    log.info('STAGE 4: QA/TESTING');
+    // ── Stage 4: Code Review ────────────────────────────────────────────────
+    log.info('STAGE 4: CODE REVIEW');
+    execution.logs.push({ timestamp: new Date(), message: 'Starting code review stage...', level: 'info' });
+
+    const CODE_REVIEW_MAX_RETRIES = 2;
+    let reviewedCode = code;
+    let reviewResult = null;
+
+    for (let attempt = 1; attempt <= CODE_REVIEW_MAX_RETRIES; attempt++) {
+      const reviewStart = Date.now();
+      reviewResult = await codeReviewAgent(reviewedCode, triggerType);
+      const reviewDuration = `${Date.now() - reviewStart}ms`;
+
+      log.info('Code review completed', { attempt, approved: reviewResult.approved, score: reviewResult.quality_score, duration: reviewDuration });
+      execution.logs.push({ timestamp: new Date(), message: `Code review (attempt ${attempt}): ${reviewResult.approved ? 'aprovado' : 'reprovado'} — score ${reviewResult.quality_score ?? 'N/A'}`, level: reviewResult.approved ? 'success' : 'warn' });
+
+      if (reviewResult.approved) {
+        // Aplica correções menores feitas pelo próprio code review agent
+        if (reviewResult.corrected_files?.length > 0) {
+          const correctedPaths = new Set(reviewResult.corrected_files.map(f => f.path));
+          const originalFiles = (reviewedCode.files || []).filter(f => !correctedPaths.has(f.path));
+          reviewedCode = { ...reviewedCode, files: [...originalFiles, ...reviewResult.corrected_files] };
+          execution.logs.push({ timestamp: new Date(), message: `Code review aplicou ${reviewResult.corrected_files.length} correção(ões) menor(es)`, level: 'info' });
+        }
+        break;
+      }
+
+      if (attempt < CODE_REVIEW_MAX_RETRIES) {
+        // Envia blocking_issues de volta ao developer para correção
+        log.warn('Code review blocked — re-sending to developer agent', { attempt, issues: reviewResult.blocking_issues });
+        execution.logs.push({ timestamp: new Date(), message: `Re-enviando ao developer (tentativa ${attempt + 1}): ${reviewResult.blocking_issues.join('; ')}`, level: 'warn' });
+        emitter?.emit('progress', { stage: 'code_review', stageIndex: 4, status: 'retry', attempt });
+
+        const correctionSpec = JSON.stringify({
+          original_specification: JSON.parse(reviewedCode._specInput || '{}'),
+          blocking_issues: reviewResult.blocking_issues,
+          warnings: reviewResult.warnings,
+          previous_files: reviewedCode.files,
+        });
+        reviewedCode = await developerAgent(correctionSpec, triggerType);
+      }
+    }
+
+    execution.stages.code_review = { status: 'completed', result: reviewResult, approved: reviewResult.approved };
+    emitter?.emit('progress', { stage: 'code_review', stageIndex: 4, status: 'completed', approved: reviewResult.approved });
+
+    if (!reviewResult.approved) {
+      execution.status = 'blocked_by_review';
+      execution.error = `Code Review bloqueou após ${CODE_REVIEW_MAX_RETRIES} tentativas: ${reviewResult.blocking_issues.join('; ')}`;
+      execution.logs.push({ timestamp: new Date(), message: execution.error, level: 'error' });
+      log.error('Code Review blocked pipeline', { issues: reviewResult.blocking_issues });
+      emitter?.emit('error', { message: execution.error, pipelineId });
+      saveExecutionToDisk(execution);
+      return execution;
+    }
+
+    try {
+      const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'code_review', requirement, input: code, output: reviewResult });
+      execution.documentation.push(docResult);
+    } catch (docError) {
+      log.warn('Documentation generation failed for code review', { error: docError.message });
+    }
+
+    // ── Stage 5: QA ─────────────────────────────────────────────────────────
+    log.info('STAGE 5: QA/TESTING');
     execution.logs.push({ timestamp: new Date(), message: 'Starting QA stage...', level: 'info' });
 
     const qaStart = Date.now();
     let qaInput;
-    if (code.files && Array.isArray(code.files) && code.files.length > 0) {
-      qaInput = code.files.map(f => `// ${f.path}\n${f.content}`).join('\n\n');
-    } else if (code.code) {
-      qaInput = `Linguagem: ${code.language || 'desconhecida'}\n\nCódigo:\n${code.code}`;
+    if (reviewedCode.files?.length > 0) {
+      const implSection = `## Arquivos de implementação\n\n${reviewedCode.files.map(f => `// ${f.path}\n${f.content}`).join('\n\n')}`;
+      const testsSection = reviewedCode.tests?.length > 0
+        ? `\n\n## Arquivos de teste\n\n${reviewedCode.tests.map(f => `// ${f.path}\n${f.content}`).join('\n\n')}`
+        : '\n\n## Arquivos de teste\n\n(nenhum arquivo de teste gerado pelo developer agent)';
+      qaInput = implSection + testsSection;
+    } else if (reviewedCode.code) {
+      qaInput = `Linguagem: ${reviewedCode.language || 'desconhecida'}\n\nCódigo:\n${reviewedCode.code}`;
     } else {
-      qaInput = JSON.stringify(code);
+      qaInput = JSON.stringify(reviewedCode);
     }
     const qaResult = await qaAgent(qaInput);
     const qaDuration = `${Date.now() - qaStart}ms`;
@@ -189,7 +257,7 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     execution.stages.qa = { status: 'completed', result: qaResult, duration: qaDuration };
     execution.logs.push({ timestamp: new Date(), message: 'QA tests completed', level: 'success' });
     log.info('QA completed', { duration: qaDuration });
-    emitter?.emit('progress', { stage: 'qa', stageIndex: 4, status: 'completed', duration: qaDuration });
+    emitter?.emit('progress', { stage: 'qa', stageIndex: 5, status: 'completed', duration: qaDuration });
 
     try {
       const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'qa', requirement, input: code, output: qaResult });
@@ -232,18 +300,18 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     execution.stages.qa.gatewayStatus = 'approved';
     log.info('QA Gateway approved', { coverage: qaCoverage });
 
-    // ── Stage 5: DevOps/Deployment ──────────────────────────────────────────
-    log.info('STAGE 5: DEVOPS/DEPLOYMENT');
+    // ── Stage 6: DevOps/Deployment ──────────────────────────────────────────
+    log.info('STAGE 6: DEVOPS/DEPLOYMENT');
     execution.logs.push({ timestamp: new Date(), message: 'Starting deployment stage...', level: 'info' });
 
     const deployStart = Date.now();
-    const deployment = await devopsAgent(JSON.stringify(code));
+    const deployment = await devopsAgent(JSON.stringify(reviewedCode));
     const deployDuration = `${Date.now() - deployStart}ms`;
 
     execution.stages.deployment = { status: 'completed', result: deployment, duration: deployDuration };
     execution.logs.push({ timestamp: new Date(), message: 'Deployment plan created', level: 'success' });
     log.info('Deployment completed', { duration: deployDuration });
-    emitter?.emit('progress', { stage: 'deployment', stageIndex: 5, status: 'completed', duration: deployDuration });
+    emitter?.emit('progress', { stage: 'deployment', stageIndex: 6, status: 'completed', duration: deployDuration });
 
     try {
       const docResult = await documenter.generateAndSaveDocumentation({ pipelineId, stage: 'deployment', requirement, input: code, output: deployment });
@@ -255,7 +323,7 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
 
     // ── Index document ──────────────────────────────────────────────────────
     try {
-      await documenter.generateIndexDocument(pipelineId, ['specification', 'analysis', 'ux_design', 'development', 'qa', 'deployment']);
+      await documenter.generateIndexDocument(pipelineId, ['specification', 'analysis', 'ux_design', 'development', 'code_review', 'qa', 'deployment']);
       execution.logs.push({ timestamp: new Date(), message: 'Documentation index created', level: 'info' });
     } catch (docError) {
       log.warn('Index document generation failed', { error: docError.message });
