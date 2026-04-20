@@ -69,7 +69,7 @@ async function autoCorrectJSON(requirement, agentType, requiredFields) {
     (signal) => openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
       temperature: 0.1,
-      max_tokens: 1500,
+      max_tokens: 4000,
       messages: [
         {
           role: 'system',
@@ -83,7 +83,9 @@ async function autoCorrectJSON(requirement, agentType, requiredFields) {
     }, { signal }),
     { label: `autoCorrect_${agentType}` }
   );
-  return extractJSON(response.choices[0].message.content);
+  try { return extractJSON(response.choices[0].message.content); } catch {
+    throw new Error('Could not extract valid JSON from response');
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -158,7 +160,7 @@ export async function developerAgent(specification, triggerType = 'feature') {
       (signal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.5,
-        max_tokens: 2500,
+        max_tokens: 4000,
         messages: [
           { role: 'system', content: skillContent + JSON_SUFFIX },
           { role: 'user', content: `Gere código para esta especificação: ${specification}` },
