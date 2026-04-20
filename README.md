@@ -1,46 +1,53 @@
 # Pipeline Executor
 
-Pipeline de desenvolvimento automatizado orientado por IA. A partir de um requisito em linguagem natural, o sistema aciona uma cadeia de agentes LLM especializados que percorre todas as etapas de um ciclo de desenvolvimento — especificação, análise, design UX, código, QA e DevOps — e integra o resultado diretamente em um repositório GitHub via Pull Request.
+Pipeline de desenvolvimento automatizado orientado por IA. A partir de um requisito em linguagem natural, o sistema aciona uma cadeia de agentes LLM especializados que percorre todas as etapas de um ciclo de desenvolvimento — especificação, análise, design UX, código, code review, QA e DevOps — e integra o resultado diretamente em um repositório GitHub via Pull Request.
 
 ---
 
 ## Como funciona
 
-O pipeline recebe um requisito, analisa o repositório alvo e executa 7 agentes em sequência. Cada agente usa um `SKILL.md` como system prompt especializado e gera documentação estruturada da sua etapa. Ao final, o código gerado é integrado nos arquivos do repositório e um Pull Request é aberto automaticamente para revisão.
+O pipeline recebe um requisito, analisa o repositório alvo e executa agentes em sequência. Cada agente usa um `SKILL.md` como system prompt especializado e gera documentação estruturada da sua etapa. Ao final, o código gerado é integrado nos arquivos do repositório e um Pull Request é aberto automaticamente para revisão.
 
 ```
 Requisito
     │
     ▼
 ┌─────────────┐
-│  Stage 0    │  Spec Agent       Transforma o requisito em especificação estruturada
+│  Stage 0    │  Spec Agent          Transforma o requisito em especificação estruturada
 └──────┬──────┘
        ▼
 ┌─────────────┐
-│  Stage 1    │  Analyst Agent    Gera user stories, requisitos técnicos e critérios de aceite
+│  Stage 1    │  Analyst Agent       Gera user stories, requisitos técnicos e critérios de aceite
 └──────┬──────┘
        ▼
 ┌─────────────┐
-│  Stage 2    │  UX/UI Agent      Cria especificações de design, jornadas e componentes
+│  Stage 2    │  UX/UI Agent         Cria especificações de design, jornadas e componentes
 └──────┬──────┘
        ▼
 ┌─────────────┐
-│  Stage 3    │  Developer Agent  Gera o código alinhado com a especificação
+│  Stage 3    │  Developer Agent     Gera código e testes alinhados com a especificação
 └──────┬──────┘
        ▼
 ┌─────────────┐
-│  Stage 4    │  QA Agent         Valida o código — gateway bloqueante se cobertura < 80%
+│  Stage 4    │  Code Review Agent   Valida compilação, padrões NestJS, segurança e LGPD
+└──────┬──────┘  Auto-corrige issues menores; reenvia ao developer se reprovado (max 2x)
+       │
+       ├─── Reprovado após 2 tentativas → pipeline bloqueado (status: blocked_by_review)
+       │
+       ▼
+┌─────────────┐
+│  Stage 5    │  QA Agent            Valida cobertura de testes — gateway bloqueante (≥ 80%)
 └──────┬──────┘
        │
        ├─── QA reprovado → pipeline bloqueado (status: blocked_by_qa)
        │
        ▼
 ┌─────────────┐
-│  Stage 5    │  DevOps Agent     Planeja deploy, health checks e plano de rollback
+│  Stage 6    │  DevOps Agent        Planeja deploy, health checks e plano de rollback
 └──────┬──────┘
        ▼
 ┌─────────────┐
-│  Stage 6    │  Documenter       Gera documentação Markdown para cada etapa
+│  Documenter │  Gera documentação Markdown para cada etapa automaticamente
 └──────┬──────┘
        ▼
   Pull Request aberto no repositório alvo
@@ -130,7 +137,15 @@ Resposta:
 }
 ```
 
-Se o QA reprovar:
+Pipeline bloqueado pelo Code Review:
+```json
+{
+  "status": "blocked_by_review",
+  "reason": "src/eventos/eventos.controller.ts: endpoint DELETE sem @UseGuards — qualquer usuário autenticado pode deletar eventos de outros casais"
+}
+```
+
+Pipeline bloqueado pelo QA:
 ```json
 {
   "status": "blocked_by_qa",
@@ -188,32 +203,57 @@ GET  /dashboard.html            Dashboard de monitoramento
 
 ## Sistema de SKILLs
 
-Cada agente carrega seu `SKILL.md` como system prompt antes de executar. Os arquivos ficam em `skills/<nome-do-agente>/SKILL.md` e podem ser editados sem alterar código.
+Cada agente carrega seu `SKILL.md` como system prompt antes de executar. Os arquivos ficam em `skills/<nome-do-agente>/SKILL.md` e podem ser editados sem alterar código. O `skill-loader.js` compõe o prompt final concatenando o SKILL base com subdiretórios opcionais:
+
+```
+skills/<agente>/
+├── SKILL.md              Prompt base — obrigatório
+├── references/           Referências técnicas (ex: api_reference.md)
+├── context/              Contexto de domínio Casarcom
+├── migration/            Guias PHP → NestJS
+└── checklists/           Checklists por tipo de entrega
+```
+
+Agentes disponíveis:
 
 ```
 skills/
-├── spec-agent/         Spec-Driven Development
-├── analyst-agent/      Análise de requisitos
-├── ui-ux-agent/        Design e experiência do usuário
-├── developer-agent/    Geração de código
-├── qa-agent/           Qualidade e testes
-├── devops-agent/       Deploy e infraestrutura
-└── documenter-agent/   Documentação técnica
+├── spec-agent/           Spec-Driven Development
+├── analyst-agent/        Análise de requisitos e user stories
+├── ui-ux-agent/          Design e experiência do usuário
+├── developer-agent/      Geração de código NestJS/Next.js com testes
+├── code-review-agent/    Revisão técnica: compilação, segurança, LGPD
+├── qa-agent/             Qualidade, cobertura de testes e gateway bloqueante
+├── devops-agent/         Deploy e infraestrutura AWS
+├── security-agent/       Revisão de segurança e privacidade
+└── documenter-agent/     Documentação técnica Markdown
 ```
 
 Para adaptar o pipeline ao contexto da sua empresa, edite os SKILLs com suas convenções, stack e padrões.
 
 ---
 
-## Gateway de qualidade
+## Gateways de qualidade
 
-O Stage 4 (QA) funciona como gateway bloqueante. O pipeline não avança para DevOps se qualquer uma das condições abaixo for verdadeira:
+### Code Review Gateway (Stage 4)
+
+O Code Review Agent valida o código antes do QA com até **2 tentativas de correção automática**:
+
+1. Recebe `files[]` e `tests[]` do Developer Agent
+2. Verifica: compilação TypeScript, guards JWT, DTOs com `class-validator`, ausência de segredos hardcoded, conformidade LGPD nos logs
+3. **Issues menores** (decorators faltando, imports inferíveis): corrige diretamente em `corrected_files`
+4. **Issues complexas** (falha de autorização, arquitetura incorreta): devolve `blocking_issues` ao Developer Agent para re-geração
+5. Após 2 tentativas sem aprovação: pipeline retorna `status: blocked_by_review`
+
+### QA Gateway (Stage 5)
+
+O QA Agent é um gateway bloqueante. O pipeline não avança para DevOps se:
 
 - `approved: false` retornado pelo agente QA
 - `coverage_percentage` < 80% (para projetos novos)
-- Presença de issues classificadas como críticas
+- Presença de issues classificadas como críticas ou altas
 
-Quando bloqueado, o pipeline retorna `status: blocked_by_qa` com o motivo detalhado.
+Quando bloqueado: `status: blocked_by_qa` com motivo detalhado.
 
 ---
 
@@ -225,11 +265,13 @@ Todos os logs são emitidos em JSON estruturado com `pipelineId` e `executionId`
 {
   "timestamp": "2026-04-13T12:00:00.000Z",
   "level": "info",
-  "message": "QA Gateway approved",
+  "message": "Code review completed",
   "service": "pipeline-executor",
   "pipelineId": "pipeline-1234567890",
   "executionId": "exec-abc",
-  "coverage": 87
+  "attempt": 1,
+  "approved": true,
+  "score": 91
 }
 ```
 
@@ -241,7 +283,20 @@ Níveis disponíveis: `error`, `warn`, `info`, `debug` — controlados por `LOG_
 
 O histórico de execuções é salvo em `data/executions/<pipelineId>.json` e recarregado automaticamente ao reiniciar o servidor. Os workspaces dos repositórios clonados ficam em `workspaces/`.
 
-Ambos os diretórios estão no `.gitignore`.
+A documentação gerada por cada pipeline é salva em `docs/<pipelineId>/`:
+
+```
+docs/pipeline-1234567890/
+├── 00-especificacao.md
+├── 01-analise.md
+├── 02-design-ux.md
+├── 03-desenvolvimento.md
+├── 04-code-review.md
+├── 05-qa-testes.md
+└── 06-devops.md
+```
+
+Todos os diretórios estão no `.gitignore`.
 
 ---
 
@@ -251,7 +306,7 @@ Ambos os diretórios estão no `.gitignore`.
 npm test
 ```
 
-Executa 6 testes de integração cobrindo autenticação, health check, validação de body e estrutura de resposta dos endpoints principais. Não requer `OPENAI_API_KEY` — o teste do pipeline aceita retorno 500 quando a chave não está configurada no ambiente de testes.
+Executa testes de integração cobrindo autenticação, health check, validação de body e estrutura de resposta dos endpoints principais. Não requer `OPENAI_API_KEY` — o teste do pipeline aceita retorno 500 quando a chave não está configurada no ambiente de testes.
 
 ---
 
@@ -264,7 +319,9 @@ pipeline-executor/
 ├── agents.js                  Agentes base (Analyst, Developer, QA, DevOps)
 ├── agents-spec.js             Spec Agent com carregamento de SKILL
 ├── agents-ux.js               UX/UI Agent com carregamento de SKILL
+├── agents-code-review.js      Code Review Agent com loop de correção
 ├── agents-documenter.js       Documenter Agent com carregamento de SKILL
+├── skill-loader.js            Carrega e compõe system prompts a partir dos SKILLs
 ├── repository-manager.js      Clone, commit, branch e push via Git
 ├── repository-analyzer.js     Análise estática de repositórios
 ├── code-integrator.js         Integração do código gerado nos arquivos
@@ -273,9 +330,9 @@ pipeline-executor/
 ├── port-manager.js            Alocação dinâmica de portas por execução
 ├── dashboard-monitor.js       Rotas do dashboard de monitoramento
 ├── logger.js                  Logger JSON estruturado com correlation ID
-├── retry.js                   Retry com backoff exponencial para chamadas OpenAI
+├── retry.js                   Retry com backoff exponencial e timeout configurável
 ├── config/
-│   └── documentation.config.js
+│   └── documentation.config.js  Mapeamento de stages para arquivos de documentação
 ├── skills/                    SKILLs (system prompts) dos agentes
 ├── public/                    Frontend estático (index.html, dashboard.html)
 ├── tests/
