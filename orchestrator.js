@@ -177,7 +177,11 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     const qaStart = Date.now();
     let qaInput;
     if (code.files && Array.isArray(code.files) && code.files.length > 0) {
-      qaInput = code.files.map(f => `// ${f.path}\n${f.content}`).join('\n\n');
+      const implSection = `## Arquivos de implementação\n\n${code.files.map(f => `// ${f.path}\n${f.content}`).join('\n\n')}`;
+      const testsSection = code.tests && Array.isArray(code.tests) && code.tests.length > 0
+        ? `\n\n## Arquivos de teste\n\n${code.tests.map(f => `// ${f.path}\n${f.content}`).join('\n\n')}`
+        : '\n\n## Arquivos de teste\n\n(nenhum arquivo de teste gerado pelo developer agent)';
+      qaInput = implSection + testsSection;
     } else if (code.code) {
       qaInput = `Linguagem: ${code.language || 'desconhecida'}\n\nCódigo:\n${code.code}`;
     } else {
