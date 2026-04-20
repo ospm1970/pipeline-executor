@@ -175,7 +175,10 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     execution.logs.push({ timestamp: new Date(), message: 'Starting QA stage...', level: 'info' });
 
     const qaStart = Date.now();
-    const qaResult = await qaAgent(JSON.stringify(code));
+    const qaInput = code.code
+      ? `Linguagem: ${code.language || 'desconhecida'}\n\nCódigo:\n${code.code}`
+      : JSON.stringify(code);
+    const qaResult = await qaAgent(qaInput);
     const qaDuration = `${Date.now() - qaStart}ms`;
 
     execution.stages.qa = { status: 'completed', result: qaResult, duration: qaDuration };
@@ -196,8 +199,12 @@ async function runPipeline(pipelineId, requirement, executionId, repositoryPath,
     const qaCoverage = qaResult.coverage_percentage || 0;
     const coverageOk = qaCoverage >= 80;
     const hasCriticalIssues = (qaResult.issues_found || []).some(issue => {
-      const text = (typeof issue === 'string' ? issue : JSON.stringify(issue)).toLowerCase();
-      return text.includes('critical') || text.includes('crítico');
+      if (typeof issue === 'string') {
+        return issue.toLowerCase().includes('critical') || issue.toLowerCase().includes('crítico');
+      }
+      // Para objetos, verifica apenas o campo de severidade — evita falso positivo por descrições
+      const severity = (issue?.severity || issue?.level || issue?.type || '').toLowerCase();
+      return severity.includes('critical') || severity.includes('crítico');
     });
 
     if (!qaApproved || !coverageOk || hasCriticalIssues) {
