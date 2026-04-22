@@ -1,15 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { OpenAI } from 'openai';
 import { withRetry } from './retry.js';
 import logger from './logger.js';
+import { getOpenAIClient } from './openai-client.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
 
 export class DocumenterAgentWithSkill {
   constructor() {
@@ -59,7 +55,7 @@ Gere um documento Markdown profissional e detalhado que explique o que foi execu
 `;
 
       const response = await withRetry(
-        (signal) => client.chat.completions.create({
+        (signal) => getOpenAIClient('O Documenter Agent').chat.completions.create({
           model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
           messages: [
             {

@@ -6,9 +6,9 @@
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import OpenAI from 'openai';
 import { withRetry } from './retry.js';
 import logger from './logger.js';
+import { getOpenAIClient } from './openai-client.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -323,16 +323,9 @@ Return as JSON:
    * Call LLM API
    */
   async callLLM(prompt) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY not configured');
-    }
-
-    const openai = new OpenAI({ apiKey });
-
     try {
       const response = await withRetry(
-        (signal) => openai.chat.completions.create({
+        (signal) => getOpenAIClient('O UI/UX Agent').chat.completions.create({
           model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
           messages: [
             {

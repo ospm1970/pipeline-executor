@@ -6,7 +6,7 @@ process.env.API_KEY = TEST_API_KEY;
 process.env.PORT = '0'; // let OS assign a free port
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-openai-key';
 
-const { default: app } = await import('../server.js');
+const { default: app, resolveIntegrableArtifact } = await import('../server.js');
 
 let server;
 let baseUrl;
@@ -72,4 +72,56 @@ test('GET /api/deployments retorna estrutura correta', async () => {
   const body = await res.json();
   assert.ok('deployments' in body);
   assert.ok('count' in body);
+});
+
+test('resolveIntegrableArtifact prioriza o artefato final revisado', () => {
+  const finalArtifact = {
+    files: [{ path: 'src/final.js', content: 'export const reviewed = true;' }],
+    tests: [{ path: 'tests/final.test.js', content: 'test("ok", () => {});' }]
+  };
+  const developmentArtifact = {
+    files: [{ path: 'src/raw.js', content: 'export const raw = true;' }]
+  };
+
+  const resolved = resolveIntegrableArtifact({
+    finalArtifact,
+    stages: {
+      development: { result: developmentArtifact },
+      code_review: { output: { files: [{ path: 'src/review.js', content: 'export const review = true;' }] } }
+    }
+  });
+
+  assert.deepEqual(resolved, finalArtifact);
+});
+
+test('resolveIntegrableArtifact usa o output do code review quando finalArtifact não existe', () => {
+  const reviewedArtifact = {
+    files: [{ path: 'src/review.js', content: 'export const review = true;' }]
+  };
+  const developmentArtifact = {
+    files: [{ path: 'src/raw.js', content: 'export const raw = true;' }]
+  };
+
+  const resolved = resolveIntegrableArtifact({
+    stages: {
+      development: { result: developmentArtifact },
+      code_review: { output: reviewedArtifact }
+    }
+  });
+
+  assert.deepEqual(resolved, reviewedArtifact);
+});
+
+test('resolveIntegrableArtifact usa development como fallback legado', () => {
+  const developmentArtifact = {
+    files: [{ path: 'src/raw.js', content: 'export const raw = true;' }]
+  };
+
+  const resolved = resolveIntegrableArtifact({
+    stages: {
+      development: { result: developmentArtifact }
+    }
+  });
+
+  assert.deepEqual(resolved, developmentArtifact);
 });

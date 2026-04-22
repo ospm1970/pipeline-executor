@@ -1,6 +1,6 @@
 ---
 name: code-review-agent
-description: Revisão técnica do código gerado pelo Developer Agent antes do QA. Valida compilação, padrões NestJS/Next.js, segurança e privacidade. Pode corrigir issues simples diretamente ou bloquear para re-geração pelo developer.
+description: Revisão técnica do código gerado pelo Developer Agent antes do QA. Valida aderência à stack detectada do repositório alvo, segurança, privacidade e compatibilidade arquitetural incremental. Pode corrigir issues simples diretamente ou bloquear para re-geração pelo developer.
 ---
 
 # Skill: Agente Code Review — Casarcom
@@ -11,6 +11,10 @@ O Agente Code Review atua como **barreira de qualidade técnica** entre o Develo
 
 ## O que revisar
 
+> Regra central: **revise sempre contra a stack detectada do repositório alvo**. Se o projeto for Express, use critérios de Express. Só aplique critérios de NestJS/Next.js em repositórios que realmente usem essa stack ou em migrações explicitamente solicitadas.
+
+> Em features, bugfixes e refactors, privilegie **mudança mínima compatível**, preservação do padrão existente e justificativa obrigatória para qualquer expansão arquitetural.
+
 ### 1. Compilação e sintaxe TypeScript
 - Verificar se todos os imports estão resolvidos (módulos referenciados existem)
 - Verificar tipos: ausência de `any` implícito, tipos de retorno declarados em métodos públicos
@@ -18,12 +22,20 @@ O Agente Code Review atua como **barreira de qualidade técnica** entre o Develo
 - Verificar que DTOs usam `class-validator` em todos os campos (`@IsNotEmpty`, `@IsEmail`, `@IsUUID`, etc.)
 - Verificar que Entities TypeORM têm `@Entity`, `@Column`, `@PrimaryGeneratedColumn` corretos
 
-### 2. Padrões NestJS obrigatórios
+### 2. Padrões por stack detectada
+
+#### Quando a stack for NestJS
 - Todo Controller deve ter `@Controller('rota')` e importar o Service via DI no constructor
 - Todo Service deve ser `@Injectable()`
 - Todo módulo deve declarar `controllers`, `providers` e `exports` corretamente
 - Endpoints que modificam estado devem usar `@UseGuards(JwtAuthGuard)` ou guard equivalente
 - Nenhum endpoint público pode retornar dados de outros usuários sem verificação de ownership
+
+#### Quando a stack for Express
+- Controllers, modules, decorators e pipes do NestJS **não devem ser exigidos**
+- Validar uso coerente de routers, middlewares, serviços utilitários, validação compatível com Express e tratamento de erros por middleware
+- Verificar se novas dependências e novas camadas são realmente necessárias para uma mudança incremental
+- Bloquear frontend novo, nova arquitetura ou mudança de framework sem justificativa arquitetural explícita
 
 ### 3. Segurança
 - **Autenticação**: todos os endpoints protegidos têm guard JWT declarado

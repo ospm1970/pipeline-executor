@@ -4,8 +4,14 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import logger from './logger.js';
+import RepositoryAnalyzer from './repository-analyzer.js';
 
 const execAsync = promisify(exec);
+
+export function sanitizeGitUrl(url) {
+  if (!url || typeof url !== 'string') return url;
+  return url.replace(/(https:\/\/)([^@\s]+)@/gi, '$1***@');
+}
 
 export class RepositoryManager {
   constructor(baseWorkspacePath = './workspaces') {
@@ -63,6 +69,17 @@ export class RepositoryManager {
         shell: true,
         maxBuffer: 10 * 1024 * 1024,
       });
+
+      if (githubToken && repoUrl.includes('github.com')) {
+        const sanitizeRemoteCommand = process.platform === 'win32'
+          ? `cd "${repoPath}" && git remote set-url origin "${repoUrl}"`
+          : `cd '${repoPath}' && git remote set-url origin '${repoUrl}'`;
+        await execAsync(sanitizeRemoteCommand, {
+          shell: true,
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        logger.info('Remote origin sanitizado após clone autenticado');
+      }
 
       logger.info('Repositório clonado com sucesso', { repoPath });
       return repoPath;
@@ -143,10 +160,13 @@ export class RepositoryManager {
         projectVersion = packageJson.version || '1.0.0';
       }
 
+      const stackProfile = RepositoryAnalyzer.classifyProjectStack(repoPath);
+
       return {
         name: projectName,
         version: projectVersion,
-        type: this.detectProjectType(repoPath),
+        type: stackProfile.projectType,
+        stackProfile,
         path: repoPath,
       };
     } catch (error) {
@@ -155,6 +175,22 @@ export class RepositoryManager {
         name: 'unknown',
         version: '1.0.0',
         type: 'unknown',
+        stackProfile: {
+          projectType: 'unknown',
+          primaryRuntime: 'unknown',
+          primaryLanguage: 'unknown',
+          backendFramework: 'none',
+          frontendFramework: 'none',
+          frontendType: 'none',
+          uiTech: [],
+          moduleType: 'commonjs',
+          packageManager: 'unknown',
+          repoShape: 'single-app',
+          languages: [],
+          testFrameworks: [],
+          stackTags: [],
+          evidence: { manifests: [], dependencies: [], indicators: {} },
+        },
         path: repoPath,
       };
     }
@@ -199,7 +235,7 @@ export class RepositoryManager {
       });
 
       const cleanRemoteUrl = remoteUrlOutput.trim();
-      logger.info('URL remota do repositório', { url: cleanRemoteUrl });
+      logger.info('URL remota do repositório', { url: sanitizeGitUrl(cleanRemoteUrl) });
 
       // Branch: use provided branchName or detect current branch
       let currentBranch = branchName;
@@ -216,7 +252,7 @@ export class RepositoryManager {
       let remoteUrl = cleanRemoteUrl;
       if (githubToken && remoteUrl.includes('github.com') && !remoteUrl.includes('@')) {
         remoteUrl = remoteUrl.replace('https://', `https://${githubToken}@`);
-        logger.info('Usando autenticação com token para push');
+        logger.info('Usando autenticação com token para push', { url: sanitizeGitUrl(remoteUrl) });
       }
 
       // Construir comando de push usando o branch atual
@@ -265,24 +301,7 @@ export class RepositoryManager {
    */
   detectProjectType(repoPath) {
     try {
-      if (fs.existsSync(path.join(repoPath, 'package.json'))) {
-        return 'nodejs';
-      }
-      if (fs.existsSync(path.join(repoPath, 'requirements.txt')) || 
-          fs.existsSync(path.join(repoPath, 'setup.py'))) {
-        return 'python';
-      }
-      if (fs.existsSync(path.join(repoPath, 'pom.xml')) || 
-          fs.existsSync(path.join(repoPath, 'build.gradle'))) {
-        return 'java';
-      }
-      if (fs.existsSync(path.join(repoPath, 'go.mod'))) {
-        return 'go';
-      }
-      if (fs.existsSync(path.join(repoPath, 'Cargo.toml'))) {
-        return 'rust';
-      }
-      return 'unknown';
+      return RepositoryAnalyzer.detectProjectType(repoPath);
     } catch (error) {
       return 'unknown';
     }

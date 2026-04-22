@@ -11,6 +11,7 @@ import { PortManager } from './port-manager.js';
 import { executePipeline, loadExecutionsFromDisk, startPipeline, pipelineEmitters } from './orchestrator.js';
 import { CodePersister } from './code-persister.js';
 import { CodeIntegrator } from './code-integrator.js';
+import { validateWriteback } from './writeback-validator.js';
 import dashboardMonitor from './dashboard-monitor.js';
 import logger from './logger.js';
 
@@ -21,6 +22,13 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const repositoryManager = new RepositoryManager('./workspaces');
 const portManager = new PortManager();
+
+export function resolveIntegrableArtifact(pipelineExecution) {
+  return pipelineExecution?.finalArtifact
+    || pipelineExecution?.stages?.code_review?.output
+    || pipelineExecution?.stages?.development?.result
+    || null;
+}
 
 // API key authentication middleware
 const apiKeyMiddleware = (req, res, next) => {
@@ -224,8 +232,8 @@ app.post('/api/pipeline/external', async (req, res) => {
     // Execute pipeline with repository path (analysis will be done by spec agent)
     const pipelineExecution = await executePipeline(requirement, executionId, repoPath);
 
-    // Bloquear apenas em gateways de código e qualidade — segurança documenta e continua
-    if (['blocked_by_review', 'blocked_by_qa'].includes(pipelineExecution.status)) {
+    // Bloquear em qualquer gateway — não criar PR com código reprovado
+    if (['blocked_by_review', 'blocked_by_security', 'blocked_by_qa'].includes(pipelineExecution.status)) {
       const stage = pipelineExecution.stages;
       return res.status(422).json({
         pipelineId: pipelineExecution.id,
@@ -244,10 +252,60 @@ app.post('/api/pipeline/external', async (req, res) => {
     try {
       logger.info('Integrando código gerado nos arquivos do repositório');
 
-      // Integrar código gerado nos arquivos originais
-      if (pipelineExecution.stages.development && pipelineExecution.stages.development.result) {
-        const generatedCode = pipelineExecution.stages.development.result;
-        const language = generatedCode.language || 'javascript';
+      // Integrar o artefato final aprovado nos arquivos originais
+      const generatedCode = resolveIntegrableArtifact(pipelineExecution);
+      if (generatedCode) {
+        const language = generatedCode.language
+          || pipelineExecution.stages.development?.result?.language
+          || 'javascript';
+
+        const writebackValidation = validateWriteback({
+          repoPath,
+          repositoryAnalysis: pipelineExecution.repositoryAnalysis || {},
+          generatedCode,
+          requirement,
+          triggerType: pipelineExecution.triggerType || 'feature',
+        });
+
+        pipelineExecution.stages.writeback_validation = {
+          status: writebackValidation.compatible ? 'approved' : 'blocked',
+          output: writebackValidation,
+          duration: '0ms',
+          gatewayReason: writebackValidation.compatible ? null : writebackValidation.summary,
+        };
+
+        const outputDir = path.join(repoPath, 'pipeline-output');
+        if (!fs.existsSync(outputDir)) {
+          fs.mkdirSync(outputDir, { recursive: true });
+        }
+        fs.writeFileSync(
+          path.join(outputDir, 'writeback-validation.json'),
+          JSON.stringify(writebackValidation, null, 2),
+          'utf-8'
+        );
+
+        if (!writebackValidation.compatible) {
+          logger.warn('Writeback estrutural bloqueado', {
+            summary: writebackValidation.summary,
+            blockingIssues: writebackValidation.blockingIssues,
+            missingConnections: writebackValidation.missingConnections,
+            pathMismatches: writebackValidation.pathMismatches,
+          });
+
+          return res.status(422).json({
+            executionId,
+            pipelineId: pipelineExecution.id,
+            status: 'blocked_by_writeback_validation',
+            reason: writebackValidation.summary,
+            writeback_validation: writebackValidation,
+            repository: {
+              url: repositoryUrl,
+              name: repoInfo.name,
+              type: repoInfo.type,
+              version: repoInfo.version,
+            },
+          });
+        }
 
         // Criar backup dos arquivos originais
         const backup = CodeIntegrator.createBackup(repoPath);
@@ -259,8 +317,11 @@ app.post('/api/pipeline/external', async (req, res) => {
         const integration = await CodeIntegrator.integrateIntoRepository(
           repoPath,
           generatedCode,
-          language
+          language,
+          { validatedPaths: writebackValidation.validatedPaths }
         );
+
+        pipelineExecution.stages.writeback_validation.integration = integration;
 
         if (integration.success) {
           logger.info(integration.message);
@@ -291,17 +352,13 @@ app.post('/api/pipeline/external', async (req, res) => {
         pushed = true;
 
         const { createPullRequest } = await import('./github-pr.js');
-        const securityStage = pipelineExecution.stages?.security;
-        const securityWarning = securityStage?.vulnerabilitiesFound > 0
-          ? `\n\n> ⚠️ **ATENÇÃO DE SEGURANÇA:** ${securityStage.vulnerabilitiesFound} vulnerabilidade(s) crítica(s)/alta(s) detectada(s) pelo Security Agent. Revisão obrigatória antes do merge.\n> ${securityStage.vulnerabilitiesSummary}`
-          : '';
         const pr = await createPullRequest({
           repoUrl: repositoryUrl,
           githubToken,
           branchName,
           baseBranch: process.env.DEFAULT_BASE_BRANCH || 'main',
           title: `[Pipeline] ${requirement.substring(0, 72)}`,
-          body: `## Pipeline Executor\n\n**Requisito:** ${requirement}\n\n**Pipeline ID:** ${pipelineExecution.id}\n\n**Stages executados:** Spec → Analyst → UX → Developer → Code Review → Security → QA → DevOps${securityWarning}\n\n> Gerado automaticamente pelo Pipeline Executor`,
+          body: `## Pipeline Executor\n\n**Requisito:** ${requirement}\n\n**Pipeline ID:** ${pipelineExecution.id}\n\n**Stages executados:** Spec → Analyst → UX → Developer → Code Review → Security → QA → DevOps\n\n> Gerado automaticamente pelo Pipeline Executor`
         });
 
         pipelineExecution.pullRequest = pr;
