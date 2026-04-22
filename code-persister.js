@@ -144,7 +144,7 @@ ${metadata.functions.length > 0
       }
       
       // Persistir cada estágio
-      const stages = ['specification', 'analysis', 'ux_design', 'development', 'qa', 'deployment'];
+      const stages = ['specification', 'analysis', 'ux_design', 'development', 'code_review', 'security', 'qa', 'writeback_validation', 'deployment'];
       
       for (const stage of stages) {
         if (pipelineExecution.stages[stage]) {

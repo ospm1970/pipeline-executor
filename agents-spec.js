@@ -1,16 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import OpenAI from 'openai';
 import { withRetry } from './retry.js';
 import logger from './logger.js';
+import { getOpenAIClient } from './openai-client.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 export class SpecAgentWithSkill {
   constructor() {
@@ -32,7 +28,7 @@ export class SpecAgentWithSkill {
       console.log('📝 Spec Agent: Generating specification...');
       
       const response = await withRetry(
-        (signal) => openai.chat.completions.create({
+        (signal) => getOpenAIClient('O Spec Agent').chat.completions.create({
           model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
           temperature: 0.3,
           max_tokens: 2500,

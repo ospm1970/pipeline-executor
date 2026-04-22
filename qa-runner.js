@@ -14,6 +14,12 @@ import os from 'os';
 export class QARunner {
   // ── Detecção de ambiente ──────────────────────────────────────────────────
 
+  static isTestFilePath(filePath) {
+    return [/\.test\.[jt]sx?$/, /\.spec\.[jt]sx?$/, /__tests__\//].some((pattern) =>
+      pattern.test(String(filePath).replace(/\\/g, '/'))
+    );
+  }
+
   static detectTestFramework(repoPath) {
     const pkgPath = path.join(repoPath, 'package.json');
     if (!fs.existsSync(pkgPath)) return null;
@@ -27,6 +33,7 @@ export class QARunner {
     if (deps.vitest || testScript.includes('vitest')) return 'vitest';
     if (deps.jest || deps['@jest/core'] || deps['ts-jest'] || testScript.includes('jest')) return 'jest';
     if (deps.mocha || testScript.includes('mocha')) return 'mocha';
+    if (testScript.includes('node --test') || testScript.includes('node:test')) return 'node-test';
     return null;
   }
 
@@ -47,7 +54,6 @@ export class QARunner {
   }
 
   static findTestFiles(repoPath) {
-    const testPatterns = [/\.test\.[jt]sx?$/, /\.spec\.[jt]sx?$/, /__tests__\//];
     const files = [];
 
     const scan = (dir, depth = 0) => {
@@ -59,7 +65,7 @@ export class QARunner {
           const stat = fs.statSync(fullPath);
           if (stat.isDirectory()) {
             scan(fullPath, depth + 1);
-          } else if (testPatterns.some(p => p.test(entry) || p.test(fullPath.replace(/\\/g, '/')))) {
+          } else if (this.isTestFilePath(fullPath) || this.isTestFilePath(entry)) {
             files.push(fullPath);
           }
         }
@@ -132,7 +138,71 @@ export class QARunner {
     }
   }
 
+  static detectPackageManager(repoPath) {
+    if (fs.existsSync(path.join(repoPath, 'pnpm-lock.yaml'))) return 'pnpm';
+    if (fs.existsSync(path.join(repoPath, 'yarn.lock'))) return 'yarn';
+    if (fs.existsSync(path.join(repoPath, 'package-lock.json'))) return 'npm';
+    if (fs.existsSync(path.join(repoPath, 'package.json'))) return 'npm';
+    return null;
+  }
+
+  static buildInstallCommand(packageManager) {
+    switch (packageManager) {
+      case 'pnpm':
+        return 'pnpm install --frozen-lockfile';
+      case 'yarn':
+        return 'yarn install --frozen-lockfile';
+      case 'npm':
+        return 'npm ci';
+      default:
+        return null;
+    }
+  }
+
+  static shouldInstallDependencies(tempDir) {
+    const packageJsonPath = path.join(tempDir, 'package.json');
+    const nodeModulesPath = path.join(tempDir, 'node_modules');
+    return fs.existsSync(packageJsonPath) && !fs.existsSync(nodeModulesPath);
+  }
+
+  static ensureDependenciesInstalled(tempDir, repoPath, timeoutMs = 120_000) {
+    if (!this.shouldInstallDependencies(tempDir)) {
+      return { installed: false, skipped: true, packageManager: null };
+    }
+
+    const packageManager = this.detectPackageManager(tempDir) || this.detectPackageManager(repoPath);
+    const installCommand = this.buildInstallCommand(packageManager);
+    if (!installCommand) {
+      return { installed: false, skipped: true, packageManager: null };
+    }
+
+    console.log(`📦 QA Runner: instalando dependências com ${packageManager}...`);
+    const output = execSync(installCommand, {
+      cwd: tempDir,
+      timeout: timeoutMs,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      env: { ...process.env, CI: 'true', NODE_ENV: 'test' },
+    });
+
+    return {
+      installed: true,
+      skipped: false,
+      packageManager,
+      output: output.slice(-1000),
+    };
+  }
+
   // ── Execução de testes ────────────────────────────────────────────────────
+
+  static compactCommandOutput(output = '', maxChars = 6000) {
+    const text = String(output || '');
+    if (text.length <= maxChars) return text;
+
+    const headSize = Math.floor(maxChars / 2);
+    const tailSize = maxChars - headSize;
+    return `${text.slice(0, headSize)}\n\n...[output truncated for logging]...\n\n${text.slice(-tailSize)}`;
+  }
 
   static buildTestCommand(framework) {
     switch (framework) {
@@ -142,6 +212,8 @@ export class QARunner {
         return 'npx vitest run --coverage --coverage.reporter=json-summary --reporter=json --outputFile=test-results.json';
       case 'mocha':
         return 'npx mocha --recursive --reporter json > test-results.json 2>&1';
+      case 'node-test':
+        return 'node --test --experimental-test-coverage';
       default:
         return 'npm test';
     }
@@ -149,26 +221,45 @@ export class QARunner {
 
   static executeTests(tempDir, framework, timeoutMs = 120_000) {
     const command = this.buildTestCommand(framework);
+    const childEnv = { ...process.env, CI: 'true', NODE_ENV: 'test' };
+    delete childEnv.NODE_V8_COVERAGE;
+
     try {
       const output = execSync(command, {
         cwd: tempDir,
         timeout: timeoutMs,
         encoding: 'utf-8',
         stdio: 'pipe',
-        env: { ...process.env, CI: 'true', NODE_ENV: 'test' },
+        env: childEnv,
       });
-      return { success: true, output: output.slice(0, 3000), exitCode: 0 };
+      return { success: true, output: this.compactCommandOutput(output), exitCode: 0 };
     } catch (error) {
       return {
         success: false,
-        output: (error.stdout || error.message || '').slice(0, 3000),
+        output: this.compactCommandOutput(error.stdout || error.message || ''),
         exitCode: error.status || 1,
-        stderr: (error.stderr || '').slice(0, 1000),
+        stderr: this.compactCommandOutput(error.stderr || '', 2000),
       };
     }
   }
 
-  static parseTestResults(tempDir, framework) {
+  static parseTestResults(tempDir, framework, rawOutput = '') {
+    if (framework === 'node-test') {
+      const extractCount = (label) => {
+        const match = rawOutput.match(new RegExp(`(?:ℹ|#)\\s*${label}\\s+(\\d+)`, 'i'));
+        return match ? Number(match[1]) : 0;
+      };
+      const fail = extractCount('fail');
+      return {
+        total: extractCount('tests'),
+        passed: extractCount('pass'),
+        failed: fail,
+        pending: extractCount('skipped') + extractCount('todo'),
+        suites: extractCount('suites'),
+        success: fail === 0,
+      };
+    }
+
     const resultsPath = path.join(tempDir, 'test-results.json');
     if (!fs.existsSync(resultsPath)) return null;
 
@@ -211,21 +302,36 @@ export class QARunner {
     return null;
   }
 
-  static parseCoverageSummary(tempDir) {
+  static parseCoverageSummary(tempDir, framework = null, rawOutput = '') {
     const summaryPath = path.join(tempDir, 'coverage', 'coverage-summary.json');
-    if (!fs.existsSync(summaryPath)) return null;
+    if (fs.existsSync(summaryPath)) {
+      try {
+        const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf-8'));
+        const total = summary.total || {};
+        return {
+          lines: total.lines?.pct ?? 0,
+          statements: total.statements?.pct ?? 0,
+          functions: total.functions?.pct ?? 0,
+          branches: total.branches?.pct ?? 0,
+          overall: total.lines?.pct ?? 0,
+        };
+      } catch { /* ignore and try fallback below */ }
+    }
 
-    try {
-      const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf-8'));
-      const total = summary.total || {};
-      return {
-        lines: total.lines?.pct ?? 0,
-        statements: total.statements?.pct ?? 0,
-        functions: total.functions?.pct ?? 0,
-        branches: total.branches?.pct ?? 0,
-        overall: total.lines?.pct ?? 0,
-      };
-    } catch { return null; }
+    if (framework === 'node-test' && rawOutput.includes('start of coverage report')) {
+      const allFilesMatch = rawOutput.match(/(?:#|ℹ)\s*all files\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)/i);
+      if (allFilesMatch) {
+        return {
+          lines: Number(allFilesMatch[1]),
+          branches: Number(allFilesMatch[2]),
+          functions: Number(allFilesMatch[3]),
+          statements: Number(allFilesMatch[1]),
+          overall: Number(allFilesMatch[1]),
+        };
+      }
+    }
+
+    return null;
   }
 
   // ── Lint ──────────────────────────────────────────────────────────────────
@@ -258,8 +364,9 @@ export class QARunner {
     let tempDir = null;
     try {
       tempDir = this.prepareEnvironment(repoPath, null);
-      this.executeTests(tempDir, framework, 90_000);
-      const coverage = this.parseCoverageSummary(tempDir);
+      this.ensureDependenciesInstalled(tempDir, repoPath, 120_000);
+      const baselineRun = this.executeTests(tempDir, framework, 90_000);
+      const coverage = this.parseCoverageSummary(tempDir, framework, baselineRun.output);
       return coverage;
     } catch {
       return null;
@@ -301,13 +408,18 @@ export class QARunner {
     result.framework = framework;
 
     if (!framework) {
-      result.errors.push('Nenhum framework de testes detectado (jest/vitest/mocha)');
+      result.errors.push('Nenhum framework de testes detectado (jest/vitest/mocha/node-test)');
       return result;
     }
 
     const existingTestFiles = this.findTestFiles(repoPath);
-    const generatedTestFiles = generatedCode?.tests?.length ?? 0;
-    result.hasTests = existingTestFiles.length > 0 || generatedTestFiles > 0;
+    const generatedTestFiles = [
+      ...(generatedCode?.tests || []).filter(file => this.isTestFilePath(file.path)),
+      ...(generatedCode?.files || []).filter(file => this.isTestFilePath(file.path)),
+    ];
+    result.existingTestFiles = existingTestFiles.map(file => path.relative(repoPath, file));
+    result.generatedTestFiles = generatedTestFiles.map(file => file.path);
+    result.hasTests = existingTestFiles.length > 0 || generatedTestFiles.length > 0;
 
     if (!result.hasTests) {
       result.errors.push('Nenhum arquivo de teste encontrado no repositório ou no código gerado');
@@ -327,19 +439,22 @@ export class QARunner {
       console.log('🧪 QA Runner: preparando ambiente isolado...');
       tempDir = this.prepareEnvironment(repoPath, generatedCode);
 
+      // Install dependencies when the cloned repository has no node_modules
+      result.install = this.ensureDependenciesInstalled(tempDir, repoPath, 120_000);
+
       // Execute tests
       console.log(`🧪 QA Runner: executando testes (${framework})...`);
       const run = this.executeTests(tempDir, framework);
       result.ran = true;
 
       // Parse structured test results
-      result.testResults = this.parseTestResults(tempDir, framework) ?? {
+      result.testResults = this.parseTestResults(tempDir, framework, run.output) ?? {
         success: run.success,
         rawOutput: run.output,
       };
 
       // Parse coverage
-      result.coverage = this.parseCoverageSummary(tempDir);
+      result.coverage = this.parseCoverageSummary(tempDir, framework, run.output);
       if (result.coverage) {
         console.log(`   Cobertura: ${result.coverage.overall}% linhas, ${result.coverage.functions}% funções`);
       }

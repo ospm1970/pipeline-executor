@@ -1,9 +1,7 @@
-import OpenAI from 'openai';
 import { withRetry } from './retry.js';
 import logger from './logger.js';
 import { loadSkill } from './skill-loader.js';
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import { getOpenAIClient } from './openai-client.js';
 
 const JSON_SUFFIX = `
 
@@ -41,6 +39,29 @@ function extractJSON(content) {
     }
     throw new Error('Could not extract valid JSON from security agent response');
   }
+}
+
+export function normalizeSecurityAgentResult(review = {}) {
+  const vulnerabilities = Array.isArray(review.vulnerabilities)
+    ? review.vulnerabilities.filter(Boolean)
+    : [];
+  const recommendations = Array.isArray(review.recommendations)
+    ? review.recommendations.filter(Boolean)
+    : [];
+  const hasFindings = vulnerabilities.length > 0;
+  const status = hasFindings
+    ? 'approved_with_warnings'
+    : (review.security_status || 'approved');
+
+  return {
+    ...review,
+    approved: true,
+    security_status: status,
+    vulnerabilities,
+    recommendations,
+    block_reason: null,
+    documentation_required: hasFindings,
+  };
 }
 
 /**
@@ -107,7 +128,7 @@ export async function securityAgent(developerOutput, triggerType = 'feature') {
     const securityInput = buildSecurityInput(developerOutput);
 
     const response = await withRetry(
-      (signal) => openai.chat.completions.create({
+      (signal) => getOpenAIClient('O Security Agent').chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.2,
         max_tokens: 4000,
@@ -132,9 +153,9 @@ export async function securityAgent(developerOutput, triggerType = 'feature') {
     let review = null;
     try { review = extractJSON(response.choices[0].message.content); } catch { /* fall through */ }
 
-    if (!review || typeof review.approved !== 'boolean') {
-      console.warn('⚠️ Security Agent: JSON inválido ou campo approved ausente — aprovando com aviso');
-      return {
+    if (!review || typeof review !== 'object') {
+      console.warn('⚠️ Security Agent: JSON inválido — aprovando com aviso e exigindo revisão manual registrada');
+      return normalizeSecurityAgentResult({
         security_status: 'approved_with_warnings',
         block_reason: null,
         privacy_by_design: { issues: [] },
@@ -142,23 +163,24 @@ export async function securityAgent(developerOutput, triggerType = 'feature') {
         vulnerabilities: [],
         lgpd_compliance: { issues: [] },
         approved: true,
-        recommendations: [{ priority: 'Alta', recommendation: 'Security Agent retornou resposta inválida — revisão manual de segurança obrigatória antes do deploy' }],
-      };
+        recommendations: [{ priority: 'Alta', recommendation: 'Security Agent retornou resposta inválida — revisão manual de segurança deve ser registrada antes do deploy' }],
+      });
     }
 
-    const status = review.approved ? '✅' : '❌';
-    const vulnCount = review.vulnerabilities?.length ?? 0;
-    console.log(`${status} Security Agent: ${review.security_status} — ${vulnCount} vulnerabilidade(s) encontrada(s)`);
+    const normalizedReview = normalizeSecurityAgentResult(review);
+    const status = normalizedReview.vulnerabilities.length > 0 ? '⚠️' : '✅';
+    const vulnCount = normalizedReview.vulnerabilities.length;
+    console.log(`${status} Security Agent: ${normalizedReview.security_status} — ${vulnCount} vulnerabilidade(s) documentada(s)`);
 
-    const blocking = (review.vulnerabilities || []).filter(v => {
-      const sev = (v.severity || '').toLowerCase();
+    const highlighted = normalizedReview.vulnerabilities.filter(v => {
+      const sev = String(v.severity || '').toLowerCase();
       return sev === 'critical' || sev === 'crítico' || sev === 'high' || sev === 'alto';
     });
-    if (blocking.length > 0) {
-      blocking.forEach(v => console.warn(`  ⛔ [${v.severity}] ${v.category}: ${v.description}`));
+    if (highlighted.length > 0) {
+      highlighted.forEach(v => console.warn(`  ⛔ [${v.severity}] ${v.category}: ${v.description}`));
     }
 
-    return review;
+    return normalizedReview;
   } catch (error) {
     console.error('❌ Security Agent Error:', error.message);
     throw error;

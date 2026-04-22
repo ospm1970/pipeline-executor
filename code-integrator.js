@@ -209,7 +209,7 @@ export class CodeIntegrator {
    * escreve cada arquivo no caminho correto dentro do repositório.
    * Caso contrário, usa o comportamento legado de concatenação.
    */
-  static async integrateIntoRepository(repoPath, generatedCode, language) {
+  static async integrateIntoRepository(repoPath, generatedCode, language, options = {}) {
     try {
       console.log(`🔧 Integrando código gerado no repositório...`);
 
@@ -218,6 +218,8 @@ export class CodeIntegrator {
         typeof generatedCode === 'object' &&
         Array.isArray(generatedCode.files) &&
         generatedCode.files.length > 0;
+      const validatedPaths = new Set((options.validatedPaths || []).map(item => String(item).replace(/^\.?[/\\]/, '').replace(/\\/g, '/')));
+      const enforceValidatedPaths = validatedPaths.size > 0;
 
       if (hasFilesSchema) {
         const allEntries = [
@@ -235,7 +237,13 @@ export class CodeIntegrator {
           }
 
           // Normalizar caminho: remover leading slash ou ./
-          const normalizedRelPath = entry.path.replace(/^\.?[/\\]/, '');
+          const normalizedRelPath = entry.path.replace(/^\.?[/\\]/, '').replace(/\\/g, '/');
+
+          if (enforceValidatedPaths && !validatedPaths.has(normalizedRelPath)) {
+            console.warn(`⚠️ Writeback bloqueado para caminho não validado: ${normalizedRelPath}`);
+            continue;
+          }
+
           const targetPath = path.join(repoPath, normalizedRelPath);
 
           // Criar diretórios necessários
@@ -256,7 +264,8 @@ export class CodeIntegrator {
           success: true,
           message: `Código integrado em ${filesWritten} arquivo(s)`,
           filesModified: filesWritten,
-          files: writtenPaths.map(p => ({ relativePath: p }))
+          files: writtenPaths.map(p => ({ relativePath: p })),
+          integrationDecision: enforceValidatedPaths ? 'validated_paths_only' : 'legacy_all_paths'
         };
       }
 

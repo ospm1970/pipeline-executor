@@ -10,7 +10,9 @@
     "prod": "node server.js",
     "build": "echo 'No build needed'",
     "test": "node --test tests/integration.test.js",
-    "test:ui": "playwright test --config=tests/playwright.config.js"
+    "test:plan-validation": "node scripts/run-validation-plan.mjs",
+    "test:ui": "playwright test --config=tests/playwright.config.js",
+    "monitor:pipeline": "node scripts/run-pipeline-monitor.mjs"
   },
   "keywords": [
     "ai",

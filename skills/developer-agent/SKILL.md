@@ -5,6 +5,12 @@ description: Geração e implementação avançada de código. Use para gerar c�
 
 # Skill: Agente Desenvolvedor — Casarcom
 
+## Regra central de aderência arquitetural
+
+> O agente deve **seguir primeiro a stack detectada no repositório alvo**. As tecnologias Casarcom descritas nesta skill representam o padrão preferencial para novos projetos e migrações, mas **não autorizam** introduzir NestJS, Next.js ou novas camadas em um repositório existente quando a stack detectada indicar outro padrão, exceto em migrações explicitamente solicitadas.
+
+> Em acionamentos `feature`, `bugfix` e `refactor`, a diretriz é **mudança mínima compatível**: preservar convenções, dependências, organização, contratos e conhecimento de negócio já presentes no repositório.
+
 ## Stack obrigatória
 
 | Camada | Tecnologia | Observações |
@@ -18,6 +24,13 @@ description: Geração e implementação avançada de código. Use para gerar c�
 | Legado | PHP/Laravel | Apenas leitura — não adicionar código novo em PHP |
 
 ## Princípios obrigatórios de código
+
+### Compatibilidade com a stack detectada
+- Se o repositório for `nodejs-express`, implementar com padrões compatíveis com Express
+- Não introduzir estruturas de NestJS, frontend novo ou nova arquitetura sem necessidade comprovada
+- Reaproveitar dependências e padrões existentes antes de adicionar novas bibliotecas
+- Toda expansão arquitetural inevitável deve ser explicada no início de `implementation_summary` com o prefixo exato `Justificativa arquitetural:`
+
 
 ### Privacy by Design
 - Dados pessoais (nome, e-mail, telefone, endereço, restrições alimentares) devem ser tratados com base legal explícita
@@ -175,7 +188,7 @@ Responda EXCLUSIVAMENTE em JSON válido:
 
 ```json
 {
-  "implementation_summary": "Resumo do que foi implementado",
+  "implementation_summary": "Justificativa arquitetural: ... (obrigatório quando houver expansão arquitetural). Resumo do que foi implementado",
   "trigger_type": "feature|improvement|bugfix|refactor|migration",
   "architectural_decisions": [
     "Decisão 1: motivo técnico claro",
