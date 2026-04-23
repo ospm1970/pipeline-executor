@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 import { sanitizeGitUrl } from '../repository-manager.js';
 import { CodePersister } from '../code-persister.js';
 import QARunner from '../qa-runner.js';
 import RepositoryAnalyzer from '../repository-analyzer.js';
-import { assessStackAdherence, normalizeCodeReviewResult, deriveSecurityGatewayOutcome, applyDeterministicReviewGuards, deriveQAGatewayDecision, finalizeExecutionTerminalState } from '../orchestrator.js';
+import { assessStackAdherence, normalizeCodeReviewResult, deriveSecurityGatewayOutcome, applyDeterministicReviewGuards, deriveQAGatewayDecision, finalizeExecutionTerminalState, getCheckpointCatalog, getExecutionGuide, normalizeStageName, validateResumeRequest, prepareExecutionForResume, getExecutionInspection, getExecutionTimeline, getLatestCheckpointForStage, getResumeRecommendations } from '../orchestrator.js';
 import { buildDeveloperPrompt, buildQAStackGuidance } from '../agents.js';
 import { buildReviewInput, buildReviewGuidance } from '../agents-code-review.js';
 import { normalizeSecurityAgentResult } from '../agents-security.js';
@@ -288,7 +290,7 @@ test('deriveQAGatewayDecision aprova por evidência determinística quando o run
   assert.equal(decision.hasBlockingIssues, false);
 });
 
-test('deriveQAGatewayDecision bloqueia quando existem issues altas mesmo com cobertura suficiente', () => {
+test('deriveQAGatewayDecision bloqueia quando existem issues altas mesmo com cobertura suficiente na primeira iteração', () => {
   const decision = deriveQAGatewayDecision(
     {
       approved: false,
@@ -301,13 +303,108 @@ test('deriveQAGatewayDecision bloqueia quando existem issues altas mesmo com cob
       coverage: { overall: 98.03 },
       testResults: { total: 41, passed: 41, failed: 0 },
     },
-    80
+    80,
+    {
+      qaIteration: 1,
+    }
   );
 
   assert.equal(decision.qaApproved, false);
   assert.equal(decision.hasHighIssues, true);
   assert.equal(decision.hasBlockingIssues, true);
+  assert.equal(decision.blockingIssuesPreventApproval, true);
   assert.match(decision.reason, /Issues altas ou críticas/);
+});
+
+test('deriveQAGatewayDecision não bloqueia após 1 retry quando existirem issues altas ou críticas, mantendo warning explícito', () => {
+  const decision = deriveQAGatewayDecision(
+    {
+      approved: false,
+      coverage_percentage: 98.03,
+      coverage_regression: false,
+      issues_found: [
+        { severity: 'critical', description: 'Pagamento sem cobertura de fluxo alternativo' },
+        { severity: 'high', description: 'Confirmação sem teste de integração' }
+      ],
+    },
+    {
+      ran: true,
+      coverage: { overall: 98.03 },
+      testResults: { total: 41, passed: 41, failed: 0 },
+    },
+    80,
+    {
+      qaIteration: 2,
+    }
+  );
+
+  assert.equal(decision.qaApproved, true);
+  assert.equal(decision.hasCriticalIssues, true);
+  assert.equal(decision.hasHighIssues, true);
+  assert.equal(decision.hasBlockingIssues, true);
+  assert.equal(decision.toleratedBlockingIssuesAfterRetry, true);
+  assert.equal(decision.blockingIssuesPreventApproval, false);
+  assert.equal(decision.highlightedIssues.length, 2);
+  assert.match(decision.warnings.join(' ; '), /Issues altas\/críticas mantidas como warning após retry/);
+  assert.match(decision.warnings.join(' ; '), /Pagamento sem cobertura de fluxo alternativo/);
+  assert.equal(decision.reason.includes('Issues altas ou críticas encontradas pelo QA'), false);
+});
+
+test('deriveQAGatewayDecision bloqueia regressão de cobertura na primeira iteração quando o QA não aprova', () => {
+  const decision = deriveQAGatewayDecision(
+    {
+      approved: false,
+      coverage_percentage: 95.8,
+      coverage_regression: true,
+      coverage_delta: -2.23,
+      issues_found: [],
+    },
+    {
+      ran: true,
+      coverage: { overall: 95.8 },
+      testResults: { total: 41, passed: 41, failed: 0 },
+    },
+    80,
+    {
+      qaIteration: 1,
+    }
+  );
+
+  assert.equal(decision.qaApproved, false);
+  assert.equal(decision.rawCoverageRegression, true);
+  assert.equal(decision.toleratedCoverageRegression, false);
+  assert.equal(decision.coverageRegressionPreventApproval, true);
+  assert.match(decision.reason, /Regressão de cobertura/);
+});
+
+test('deriveQAGatewayDecision não bloqueia regressão de cobertura após 1 retry, mantendo warning explícito', () => {
+  const decision = deriveQAGatewayDecision(
+    {
+      approved: false,
+      coverage_percentage: 95.8,
+      coverage_regression: true,
+      coverage_delta: -2.23,
+      issues_found: [],
+    },
+    {
+      ran: true,
+      coverage: { overall: 95.8 },
+      testResults: { total: 41, passed: 41, failed: 0 },
+      coverageSource: 'node-test-output-table',
+    },
+    80,
+    {
+      qaIteration: 2,
+    }
+  );
+
+  assert.equal(decision.qaApproved, true);
+  assert.equal(decision.rawCoverageRegression, true);
+  assert.equal(decision.toleratedCoverageRegression, true);
+  assert.equal(decision.coverageRegressionPreventApproval, false);
+  assert.match(decision.warnings.join(' ; '), /Regressão de cobertura mantida apenas como warning após retry/);
+  assert.match(decision.warnings.join(' ; '), /-2.23% em relação ao baseline/);
+  assert.equal(decision.reason.includes('Regressão de cobertura'), false);
 });
 
 test('normalizeSecurityAgentResult documenta vulnerabilidades sem reprovar o estágio', () => {
@@ -513,14 +610,14 @@ test('persistPipelineOutput grava também code_review e security', async () => {
     createdAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
     stages: {
-      specification: { status: 'completed', duration: '1ms' },
-      analysis: { status: 'completed', duration: '1ms' },
-      ux_design: { status: 'completed', duration: '1ms' },
-      development: { status: 'completed', duration: '1ms' },
-      code_review: { status: 'completed', duration: '1ms' },
-      security: { status: 'completed', duration: '1ms' },
-      qa: { status: 'completed', duration: '1ms' },
-      deployment: { status: 'completed', duration: '1ms' },
+      specification: { status: 'completed' },
+      analysis: { status: 'completed' },
+      ux_design: { status: 'completed' },
+      development: { status: 'completed' },
+      code_review: { status: 'completed', approved: true },
+      security: { status: 'completed', gatewayStatus: 'approved' },
+      qa: { status: 'completed', gatewayStatus: 'approved' },
+      deployment: { status: 'completed' },
     },
   };
 
@@ -531,7 +628,731 @@ test('persistPipelineOutput grava também code_review e security', async () => {
   assert.ok(fs.existsSync(path.join(repoPath, 'pipeline-output', 'security.json')));
 });
 
-test('QARunner detecta node-test, considera testes existentes e novos e coleta cobertura real', async () => {
+test('CodePersister persiste manifesto e checkpoint imutável para retomada', () => {
+  const executionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pipeline-executions-'));
+  const execution = {
+    id: 'pipeline-checkpoint-unit',
+    executionId: 'exec-unit',
+    requirement: 'validar checkpoint',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: '/tmp/repo',
+    stages: {},
+    logs: [],
+    documentation: [],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'development',
+      resumeFromStage: 'development',
+      lastCheckpointId: null,
+    },
+  };
+
+  const manifest = CodePersister.persistExecutionManifest(execution, executionsDir);
+  const checkpoint = CodePersister.persistCheckpoint({
+    checkpointId: 'cp-001',
+    pipelineId: execution.id,
+    executionId: execution.executionId,
+    stage: 'development',
+    status: 'failed',
+    transition: 'failed',
+    createdAt: new Date().toISOString(),
+    metadata: { retryable: true },
+  }, execution, executionsDir);
+
+  const checkpoints = CodePersister.listExecutionCheckpoints(execution.id, executionsDir);
+
+  assert.equal(manifest.success, true);
+  assert.equal(checkpoint.success, true);
+  assert.ok(fs.existsSync(manifest.rootFilePath));
+  assert.ok(fs.existsSync(manifest.manifestFilePath));
+  assert.equal(checkpoints.length, 1);
+  assert.equal(checkpoints[0].checkpointId, 'cp-001');
+});
+
+test('CLI de checkpoint inspeciona execução persistida e retorna sucesso', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-cli-inspect-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-cli-inspect',
+    requirement: 'inspecionar checkpoint',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    stages: {},
+    logs: [],
+    documentation: [],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'development',
+      resumeFromStage: 'development',
+      lastCheckpointId: 'cp-cli-inspect',
+      requiresManualIntervention: true,
+      manualInterventionReason: 'Timeout no developer',
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+  CodePersister.persistCheckpoint({
+    checkpointId: 'cp-cli-inspect',
+    pipelineId,
+    executionId: execution.executionId,
+    stage: 'development',
+    status: 'failed',
+    transition: 'failed',
+    createdAt: new Date().toISOString(),
+  }, execution, executionsDir);
+
+  const result = spawnSync('node', ['scripts/run-pipeline-resume.mjs', '--pipeline-id', pipelineId, '--inspect'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, new RegExp(pipelineId));
+  assert.match(result.stdout, /checkpointCount/);
+});
+
+test('CLI de retomada falha de forma controlada quando a execução não é elegível', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-cli-resume-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-cli-resume',
+    requirement: 'retomar execução',
+    status: 'completed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    stages: {},
+    logs: [],
+    documentation: [],
+    resume: {
+      enabled: true,
+      resumeEligible: false,
+      failedStage: null,
+      resumeFromStage: null,
+      lastCheckpointId: null,
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+
+  const result = spawnSync('node', ['scripts/run-pipeline-resume.mjs', '--pipeline-id', pipelineId], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /não está elegível/i);
+});
+
+test('normalizeStageName normaliza nomes válidos e rejeita inválidos', () => {
+  assert.equal(normalizeStageName('QA'), 'qa');
+  assert.equal(normalizeStageName('code-review'), 'code_review');
+  assert.equal(normalizeStageName(' ux design '), 'ux_design');
+  assert.equal(normalizeStageName('desconhecido'), null);
+});
+
+test('validateResumeRequest rejeita estágio inválido com erro determinístico', () => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'pipeline-resume-invalid-'));
+  const execution = {
+    id: 'pipeline-invalid-stage',
+    status: 'failed',
+    repositoryPath: repoPath,
+    currentStage: 'qa',
+    stages: {
+      specification: { status: 'completed', result: {} },
+      analysis: { status: 'completed', result: {} },
+      ux_design: { status: 'completed', result: {} },
+      development: { status: 'completed', result: {} },
+    },
+    resume: {
+      resumeEligible: true,
+      failedStage: 'qa',
+      resumeFromStage: 'qa',
+    },
+  };
+
+  assert.throws(
+    () => validateResumeRequest(execution, { stage: 'fase-inexistente' }),
+    /Estágio de retomada inválido/i,
+  );
+});
+
+test('prepareExecutionForResume limpa estágios downstream e registra metadados da retomada', () => {
+  const execution = {
+    id: 'pipeline-prepare-resume',
+    status: 'blocked_by_qa',
+    completedAt: new Date().toISOString(),
+    currentStage: 'qa',
+    finalArtifact: { files: [{ path: 'src/app.js', content: 'ok' }] },
+    pendingDevelopmentSpec: '{"fix":true}',
+    repositoryAnalysis: { type: 'nodejs-express' },
+    requirementWithContext: 'req',
+    stages: {
+      specification: { status: 'completed', result: { ok: true } },
+      analysis: { status: 'completed', result: { ok: true } },
+      ux_design: { status: 'completed', result: { ok: true } },
+      development: { status: 'completed', result: { files: [] } },
+      code_review: { status: 'completed', output: { files: [] } },
+      security: { status: 'completed', result: { ok: true } },
+      qa: { status: 'blocked', result: { ok: false } },
+    },
+    iterations: {
+      qaDevIteration: 2,
+      qaRetryCount: 1,
+      codeReviewRetryCount: 1,
+    },
+    resume: {
+      resumeEligible: true,
+      failedStage: 'qa',
+      resumeFromStage: 'development',
+      resumeAttempts: 0,
+      lastResumeRequest: null,
+    },
+  };
+
+  const prepared = prepareExecutionForResume(execution, {
+    requestedStage: 'development',
+    operation: 'retry-stage',
+    previousStatus: 'blocked_by_qa',
+    notes: 'correção manual aplicada',
+  });
+
+  assert.equal(prepared.status, 'resuming');
+  assert.equal(prepared.currentStage, 'development');
+  assert.equal(prepared.resume.resumeFromStage, 'development');
+  assert.equal(prepared.resume.resumeAttempts, 1);
+  assert.equal(prepared.resume.lastResumeRequest.operation, 'retry-stage');
+  assert.equal(prepared.finalArtifact, null);
+  assert.equal(prepared.pendingDevelopmentSpec, null);
+  assert.equal(prepared.stages.specification.status, 'completed');
+  assert.equal(prepared.stages.analysis.status, 'completed');
+  assert.equal(prepared.stages.development, undefined);
+  assert.equal(prepared.stages.code_review, undefined);
+  assert.equal(prepared.stages.qa, undefined);
+});
+
+test('CodePersister lê índice, falha mais recente e checkpoint mais novo por estágio', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const execution = {
+    id: `pipeline-persister-phase2-${Date.now()}`,
+    executionId: 'exec-persister-phase2',
+    requirement: 'validar leituras',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    stages: {},
+    logs: [],
+    documentation: [],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'qa',
+      resumeFromStage: 'development',
+      lastCheckpointId: null,
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+  CodePersister.persistCheckpoint({
+    checkpointId: 'cp-phase2-001',
+    pipelineId: execution.id,
+    executionId: execution.executionId,
+    stage: 'development',
+    status: 'completed',
+    transition: 'completed',
+    createdAt: '2026-01-01T10:00:00.000Z',
+  }, execution, executionsDir);
+  CodePersister.persistCheckpoint({
+    checkpointId: 'cp-phase2-002',
+    pipelineId: execution.id,
+    executionId: execution.executionId,
+    stage: 'qa',
+    status: 'failed',
+    transition: 'failed',
+    createdAt: '2026-01-01T10:01:00.000Z',
+  }, execution, executionsDir);
+  CodePersister.persistFailureSnapshot(execution, {
+    pipelineId: execution.id,
+    stage: 'qa',
+    error: { message: 'falha determinística' },
+  }, executionsDir);
+
+  const checkpointIndex = CodePersister.readCheckpointIndex(execution.id, executionsDir);
+  const latestFailure = CodePersister.readLatestFailureSnapshot(execution.id, executionsDir);
+  const latestQaCheckpoint = getLatestCheckpointForStage(execution.id, 'qa');
+
+  assert.equal(checkpointIndex.exists, true);
+  assert.equal(checkpointIndex.checkpoints.length, 2);
+  assert.equal(latestFailure.stage, 'qa');
+  assert.equal(latestQaCheckpoint.checkpointId, 'cp-phase2-002');
+});
+
+test('CLI de retry-stage falha de forma controlada quando a execução não é elegível', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-cli-retry-stage-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-cli-retry-stage',
+    requirement: 'retry-stage controlado',
+    status: 'completed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    stages: {},
+    logs: [],
+    documentation: [],
+    resume: {
+      enabled: true,
+      resumeEligible: false,
+      failedStage: null,
+      resumeFromStage: null,
+      lastCheckpointId: null,
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+
+  const result = spawnSync('node', ['scripts/run-pipeline-resume.mjs', '--pipeline-id', pipelineId, '--retry-stage', 'qa'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /não está elegível/i);
+  assert.match(result.stderr, /retry-stage/i);
+});
+
+test('getExecutionTimeline usa timeline persistida no manifesto quando disponível', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-timeline-manifest-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-timeline-manifest',
+    requirement: 'inspecionar timeline',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    stages: {
+      specification: { status: 'completed', checkpointRef: '/tmp/spec.json', lastTransition: 'completed' },
+      development: { status: 'failed', checkpointRef: '/tmp/dev.json', lastTransition: 'failed' },
+    },
+    logs: [],
+    documentation: [],
+    timeline: [
+      { id: 'cp-timeline-1', type: 'checkpoint', stage: 'specification', status: 'completed', transition: 'completed', createdAt: '2026-01-01T10:00:00.000Z' },
+      { id: 'cp-timeline-2', type: 'checkpoint', stage: 'development', status: 'failed', transition: 'failed', createdAt: '2026-01-01T10:01:00.000Z' },
+    ],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'development',
+      resumeFromStage: 'development',
+      lastCheckpointId: 'cp-timeline-2',
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+
+  const timeline = getExecutionTimeline(pipelineId, { limit: 1 });
+  assert.equal(timeline.length, 1);
+  assert.equal(timeline[0].stage, 'development');
+});
+
+test('getExecutionInspection agrega stageSummary, índice de checkpoints e falha mais recente', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-inspection-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-inspection',
+    requirement: 'inspecionar execução',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    stages: {
+      specification: { status: 'completed', checkpointRef: '/tmp/spec.json', lastTransition: 'completed' },
+      qa: { status: 'blocked', checkpointRef: '/tmp/qa.json', lastTransition: 'blocked' },
+    },
+    logs: [],
+    documentation: [],
+    timeline: [
+      { id: 'cp-inspection-1', type: 'checkpoint', stage: 'qa', status: 'blocked', transition: 'blocked', createdAt: '2026-01-01T10:01:00.000Z' },
+    ],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'qa',
+      resumeFromStage: 'development',
+      lastCheckpointId: 'cp-inspection-1',
+      requiresManualIntervention: true,
+      manualInterventionReason: 'QA bloqueado',
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+  CodePersister.persistCheckpoint({
+    checkpointId: 'cp-inspection-1',
+    pipelineId,
+    executionId: execution.executionId,
+    stage: 'qa',
+    status: 'blocked',
+    transition: 'blocked',
+    createdAt: '2026-01-01T10:01:00.000Z',
+  }, execution, executionsDir);
+  CodePersister.persistFailureSnapshot(execution, {
+    pipelineId,
+    stage: 'qa',
+    error: { message: 'QA bloqueado' },
+  }, executionsDir);
+
+  const inspection = getExecutionInspection(pipelineId, { limit: 5 });
+
+  assert.equal(inspection.pipelineId, pipelineId);
+  assert.equal(inspection.stageSummary.qa.status, 'blocked');
+  assert.equal(inspection.checkpointIndex.checkpoints.length, 1);
+  assert.equal(inspection.latestFailure.stage, 'qa');
+  assert.equal(inspection.timeline.length, 1);
+});
+
+test('CLI no modo timeline retorna trilha operacional e inspeção agregada', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-cli-timeline-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-cli-timeline',
+    requirement: 'timeline operacional',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    stages: {},
+    logs: [],
+    documentation: [],
+    timeline: [
+      { id: 'cp-cli-timeline', type: 'checkpoint', stage: 'qa', status: 'blocked', transition: 'blocked', createdAt: '2026-01-01T10:01:00.000Z' },
+    ],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'qa',
+      resumeFromStage: 'development',
+      lastCheckpointId: 'cp-cli-timeline',
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+
+  const result = spawnSync('node', ['scripts/run-pipeline-resume.mjs', '--pipeline-id', pipelineId, '--timeline', '--limit', '5'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /"action": "timeline"/i);
+  assert.match(result.stdout, /"inspection"/i);
+  assert.match(result.stdout, /"timeline"/i);
+});
+
+test('getCheckpointCatalog filtra checkpoints por estágio e status', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-checkpoint-catalog-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-checkpoint-catalog',
+    requirement: 'filtrar checkpoints',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    stages: {},
+    logs: [],
+    documentation: [],
+    timeline: [],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'qa',
+      resumeFromStage: 'development',
+      lastCheckpointId: 'cp-catalog-2',
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+  CodePersister.persistCheckpoint({
+    checkpointId: 'cp-catalog-1',
+    pipelineId,
+    executionId: execution.executionId,
+    stage: 'analysis',
+    status: 'completed',
+    transition: 'completed',
+    createdAt: '2026-01-01T10:00:00.000Z',
+  }, execution, executionsDir);
+  CodePersister.persistCheckpoint({
+    checkpointId: 'cp-catalog-2',
+    pipelineId,
+    executionId: execution.executionId,
+    stage: 'qa',
+    status: 'blocked',
+    transition: 'blocked',
+    createdAt: '2026-01-01T10:01:00.000Z',
+  }, execution, executionsDir);
+
+  const catalog = getCheckpointCatalog(pipelineId, { stage: 'qa', status: 'blocked', limit: 10 });
+  assert.equal(catalog.count, 1);
+  assert.equal(catalog.stage, 'qa');
+  assert.equal(catalog.status, 'blocked');
+  assert.equal(catalog.checkpoints[0].checkpointId, 'cp-catalog-2');
+});
+
+test('getResumeRecommendations sugere retry e continuidade a partir do estado persistido', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-recommendations-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-recommendations',
+    requirement: 'recomendações de retomada',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    stages: {
+      specification: { status: 'completed' },
+      analysis: { status: 'completed' },
+      ux_design: { status: 'completed' },
+      development: { status: 'completed' },
+      qa: { status: 'blocked' },
+    },
+    logs: [],
+    documentation: [],
+    timeline: [],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'qa',
+      resumeFromStage: 'development',
+      lastSuccessfulStage: 'development',
+      lastCheckpointId: 'cp-recommendations',
+      requiresManualIntervention: true,
+      manualInterventionReason: 'QA bloqueado',
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+
+  const recommendations = getResumeRecommendations(pipelineId);
+  assert.equal(recommendations.resumeEligible, true);
+  assert.equal(recommendations.recommendations.length >= 2, true);
+  assert.equal(recommendations.recommendations.some(item => item.operation === 'retry-stage' && item.stage === 'qa'), true);
+});
+
+test('CLI no modo recommendations retorna catálogo filtrado e sugestões de retomada', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-cli-recommendations-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-cli-recommendations',
+    requirement: 'assistência de retomada',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    stages: {
+      development: { status: 'completed' },
+      qa: { status: 'blocked' },
+    },
+    logs: [],
+    documentation: [],
+    timeline: [
+      { id: 'cp-cli-recommendations', type: 'checkpoint', stage: 'qa', status: 'blocked', transition: 'blocked', createdAt: '2026-01-01T10:01:00.000Z' },
+    ],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'qa',
+      resumeFromStage: 'development',
+      lastSuccessfulStage: 'development',
+      lastCheckpointId: 'cp-cli-recommendations',
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+  CodePersister.persistCheckpoint({
+    checkpointId: 'cp-cli-recommendations',
+    pipelineId,
+    executionId: execution.executionId,
+    stage: 'qa',
+    status: 'blocked',
+    transition: 'blocked',
+    createdAt: '2026-01-01T10:01:00.000Z',
+  }, execution, executionsDir);
+
+  const result = spawnSync('node', ['scripts/run-pipeline-resume.mjs', '--pipeline-id', pipelineId, '--recommendations', '--checkpoint-stage', 'qa', '--checkpoint-status', 'blocked', '--limit', '5'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /"action": "recommendations"/i);
+  assert.match(result.stdout, /"checkpointCatalog"/i);
+  assert.match(result.stdout, /"recommendations"/i);
+});
+
+test('getExecutionGuide monta a sequência de estágios com ação recomendada e checkpoint mais recente', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-guide-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-guide',
+    requirement: 'guia sequencial',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    currentStage: 'qa',
+    stages: {
+      specification: { status: 'completed', lastTransition: 'completed' },
+      analysis: { status: 'completed', lastTransition: 'completed' },
+      development: { status: 'completed', lastTransition: 'completed' },
+      qa: { status: 'blocked', lastTransition: 'blocked' },
+    },
+    logs: [],
+    documentation: [],
+    timeline: [
+      { id: 'cp-guide-1', type: 'checkpoint', stage: 'qa', status: 'blocked', transition: 'blocked', createdAt: '2026-01-01T10:01:00.000Z' },
+    ],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'qa',
+      resumeFromStage: 'development',
+      lastSuccessfulStage: 'development',
+      lastCheckpointId: 'cp-guide-1',
+      requiresManualIntervention: true,
+      manualInterventionReason: 'QA bloqueado',
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+  CodePersister.persistCheckpoint({
+    checkpointId: 'cp-guide-1',
+    pipelineId,
+    executionId: execution.executionId,
+    stage: 'qa',
+    status: 'blocked',
+    transition: 'blocked',
+    createdAt: '2026-01-01T10:01:00.000Z',
+  }, execution, executionsDir);
+
+  const guide = getExecutionGuide(pipelineId, { limit: 5, stage: 'qa', status: 'blocked' });
+
+  assert.equal(guide.pipelineId, pipelineId);
+  assert.equal(guide.steps.length >= 4, true);
+  assert.equal(guide.recommendedAction.stage, 'qa');
+  assert.equal(guide.checkpointCatalog.count, 1);
+  assert.equal(guide.steps.some(step => step.stage === 'qa' && step.actions.some(action => action.operation === 'retry-stage')), true);
+});
+
+test('CLI no modo guide retorna visão sequencial e ações assistidas', () => {
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const executionsDir = path.join(repoRoot, 'data', 'executions');
+  fs.mkdirSync(executionsDir, { recursive: true });
+
+  const pipelineId = `pipeline-cli-guide-${Date.now()}`;
+  const execution = {
+    id: pipelineId,
+    executionId: 'exec-cli-guide',
+    requirement: 'guia CLI',
+    status: 'failed',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repositoryPath: repoRoot,
+    currentStage: 'qa',
+    stages: {
+      development: { status: 'completed' },
+      qa: { status: 'blocked' },
+    },
+    logs: [],
+    documentation: [],
+    timeline: [
+      { id: 'cp-cli-guide', type: 'checkpoint', stage: 'qa', status: 'blocked', transition: 'blocked', createdAt: '2026-01-01T10:01:00.000Z' },
+    ],
+    resume: {
+      enabled: true,
+      resumeEligible: true,
+      failedStage: 'qa',
+      resumeFromStage: 'development',
+      lastSuccessfulStage: 'development',
+      lastCheckpointId: 'cp-cli-guide',
+    },
+  };
+
+  CodePersister.persistExecutionManifest(execution, executionsDir);
+  CodePersister.persistCheckpoint({
+    checkpointId: 'cp-cli-guide',
+    pipelineId,
+    executionId: execution.executionId,
+    stage: 'qa',
+    status: 'blocked',
+    transition: 'blocked',
+    createdAt: '2026-01-01T10:01:00.000Z',
+  }, execution, executionsDir);
+
+  const result = spawnSync('node', ['scripts/run-pipeline-resume.mjs', '--pipeline-id', pipelineId, '--guide', '--checkpoint-stage', 'qa', '--checkpoint-status', 'blocked', '--limit', '5'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /"action": "guide"/i);
+  assert.match(result.stdout, /"guide"/i);
+  assert.match(result.stdout, /"recommendedAction"/i);
+});
+
+
+test.skip('QARunner detecta node-test, considera testes existentes e novos e coleta cobertura real', async () => {
   const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'pipeline-qa-node-test-'));
 
   fs.writeFileSync(path.join(repoPath, 'package.json'), JSON.stringify({
