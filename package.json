@@ -12,7 +12,9 @@
     "test": "node --test tests/integration.test.js",
     "test:plan-validation": "node scripts/run-validation-plan.mjs",
     "test:ui": "playwright test --config=tests/playwright.config.js",
-    "monitor:pipeline": "node scripts/run-pipeline-monitor.mjs"
+    "monitor:pipeline": "node scripts/run-pipeline-monitor.mjs",
+    "pipeline:resume": "node scripts/run-pipeline-resume.mjs",
+    "pipeline:checkpoint:inspect": "node scripts/run-pipeline-resume.mjs --inspect"
   },
   "keywords": [
     "ai",
@@ -30,7 +32,7 @@
     "express-rate-limit": "^8.3.2",
     "helmet": "^8.1.0",
     "openai": "^4.52.0",
-    "uuid": "^9.0.0"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1"

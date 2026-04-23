@@ -151,6 +151,8 @@ export function buildDeveloperPrompt(specification, triggerType = 'feature') {
         `- Cobertura baseline: ${retryContext.baseline_coverage ?? 'N/A'}%`,
         `- Delta de cobertura: ${retryContext.coverage_delta ?? 'N/A'}`,
         `- Houve regressão de cobertura: ${retryContext.coverage_regression === true ? 'sim' : 'não'}`,
+        `- Origem da cobertura estruturada: ${retryContext.coverage_source || 'não informada'}`,
+        `- Estado estruturado do runner: ${retryContext.runner_execution ? JSON.stringify(retryContext.runner_execution) : 'não informado'}`,
         `- Política atual de retry: após o primeiro retry, regressão de até -2% do baseline pode seguir como warning, sem dispensar melhoria de testes quando viável`,
         `- Issues do QA: ${ensureArray(retryContext.qa_issues_found).length > 0 ? JSON.stringify(retryContext.qa_issues_found) : 'nenhuma informada'}`,
         `- Recomendações do QA: ${ensureArray(retryContext.qa_recommendations).length > 0 ? JSON.stringify(retryContext.qa_recommendations) : 'nenhuma informada'}`,
@@ -360,25 +362,31 @@ function buildRunnerSection(runnerResults) {
   const lines = ['## Evidências reais de execução (QA Runner)\n'];
 
   lines.push(`**Framework detectado:** ${runnerResults.framework || 'não detectado'}`);
+  lines.push(`**Executou testes:** ${runnerResults.ran ? 'sim' : 'não'}`);
+
+  if (runnerResults.install) {
+    lines.push(`**Instalação de dependências:** ${runnerResults.install.skipped ? 'não necessária' : (runnerResults.install.installed ? `executada com ${runnerResults.install.packageManager}` : 'não executada')}`);
+  }
 
   if (runnerResults.errors?.length > 0) {
     lines.push(`**Erros de execução:** ${runnerResults.errors.join('; ')}`);
   }
 
-    if (!runnerResults.ran) {
-      lines.push('**Status:** testes não foram executados ou não geraram evidência real suficiente.');
-      lines.push('');
-      lines.push('**INSTRUÇÃO IMPORTANTE:** Sem evidência real de execução, o QA deve tratar a entrega como não aprovada.');
-      lines.push('Registre explicitamente a ausência de evidência real em `issues_found` e recomende a configuração do framework');
-      lines.push('ou da cobertura antes de liberar o gateway. Não estime cobertura como suficiente para aprovação.');
-      return lines.join('\n');
-    }
-
+  if (!runnerResults.ran) {
+    lines.push('**Status:** testes não foram executados ou não geraram evidência real suficiente.');
+    lines.push('');
+    lines.push('**INSTRUÇÃO IMPORTANTE:** Sem evidência real de execução, o QA deve tratar a entrega como não aprovada.');
+    lines.push('Registre explicitamente a ausência de evidência real em `issues_found` e recomende a configuração do framework');
+    lines.push('ou da cobertura antes de liberar o gateway. Não estime cobertura como suficiente para aprovação.');
+    return lines.join('\n');
+  }
 
   if (runnerResults.testResults) {
     const tr = runnerResults.testResults;
     const status = tr.success ? '✅ passou' : '❌ falhou';
     lines.push(`**Resultado dos testes:** ${status} — ${tr.passed ?? 0} passaram, ${tr.failed ?? 0} falharam, ${tr.pending ?? 0} pendentes (total: ${tr.total ?? 0}, suites: ${tr.suites ?? 0})`);
+  } else {
+    lines.push('**Resultado dos testes:** execução detectada, mas sem resumo estruturado de testes.');
   }
 
   if (runnerResults.coverage) {
@@ -388,8 +396,11 @@ function buildRunnerSection(runnerResults) {
     lines.push(`  - Funções: ${c.functions}%`);
     lines.push(`  - Branches: ${c.branches}%`);
     lines.push(`  - Statements: ${c.statements}%`);
+    lines.push(`  - Origem estruturada: ${runnerResults.coverageSource || c.source || 'não informada'}`);
   } else {
-    lines.push('**Cobertura:** não foi possível coletar (coverage reporter não configurado ou testes falharam antes)');
+    lines.push('**Cobertura:** não foi possível coletar cobertura estruturada nesta execução.');
+    lines.push(`**Origem estruturada esperada:** ${runnerResults.coverageSource || 'não disponível'}`);
+    lines.push('**INSTRUÇÃO IMPORTANTE:** Se os testes executaram mas a cobertura estruturada está ausente, trate isso como falha de evidência do runner e registre explicitamente a ausência de cobertura estruturada nas issues e recomendações.');
   }
 
   if (runnerResults.baseline) {
@@ -407,6 +418,13 @@ function buildRunnerSection(runnerResults) {
     const lr = runnerResults.lintResults;
     const status = lr.errors === 0 ? '✅ sem erros' : `❌ ${lr.errors} erros`;
     lines.push(`**Lint (ESLint):** ${status}, ${lr.warnings} avisos em ${lr.files} arquivos`);
+  }
+
+  if (runnerResults.rawOutput) {
+    lines.push('**Trecho do output bruto do runner:**');
+    lines.push('```text');
+    lines.push(String(runnerResults.rawOutput).slice(0, 3000));
+    lines.push('```');
   }
 
   return lines.join('\n');
@@ -518,24 +536,65 @@ export async function qaAgent(input, triggerType = 'feature') {
       }
     }
 
+    const hasStructuredCoverage = runnerResults?.coverage?.overall !== undefined && runnerResults?.coverage?.overall !== null;
+    const hasStructuredTestResults = !!runnerResults?.testResults;
+    const coverageSource = runnerResults?.coverageSource || runnerResults?.coverage?.source || null;
+
     // Se o runner coletou cobertura real, substituir o valor estimado pelo LLM
-    if (runnerResults?.coverage?.overall !== undefined) {
+    if (hasStructuredCoverage) {
       testResult.coverage_percentage = runnerResults.coverage.overall;
       testResult.coverage_real = runnerResults.coverage;
       testResult.coverage_baseline = runnerResults.baseline ?? null;
       testResult.coverage_regression = runnerResults.coverageRegression ?? false;
       testResult.coverage_delta = runnerResults.coverageDelta ?? null;
+      testResult.coverage_source = coverageSource;
+    } else {
+      testResult.coverage_real = null;
+      testResult.coverage_baseline = runnerResults?.baseline ?? null;
+      testResult.coverage_regression = false;
+      testResult.coverage_delta = null;
+      testResult.coverage_source = coverageSource;
     }
 
-    testResult.evidence_real = runnerResults?.ran === true && !!runnerResults?.testResults;
+    testResult.evidence_real = runnerResults?.ran === true && hasStructuredTestResults && hasStructuredCoverage;
+    testResult.runner_execution = {
+      ran: runnerResults?.ran === true,
+      framework: runnerResults?.framework || null,
+      exit_code: runnerResults?.exitCode ?? null,
+      has_structured_test_results: hasStructuredTestResults,
+      has_structured_coverage: hasStructuredCoverage,
+      coverage_source: coverageSource,
+      coverage_collection_status: runnerResults?.ran !== true ? 'not_executed' : (hasStructuredCoverage ? 'collected' : 'missing'),
+      baseline_available: runnerResults?.baseline?.overall !== undefined && runnerResults?.baseline?.overall !== null,
+      install: runnerResults?.install || null,
+      errors: ensureArray(runnerResults?.errors),
+    };
+
+    testResult.issues_found = ensureArray(testResult.issues_found);
+    testResult.recommendations = ensureArray(testResult.recommendations);
+
     if (runnerResults?.ran === false) {
       testResult.approved = false;
       testResult.coverage_percentage = runnerResults?.coverage?.overall ?? 0;
-      testResult.issues_found = ensureArray(testResult.issues_found);
-      testResult.issues_found.push('Sem evidência real de execução de testes e cobertura');
+      if (!testResult.issues_found.includes('Sem evidência real de execução de testes e cobertura')) {
+        testResult.issues_found.push('Sem evidência real de execução de testes e cobertura');
+      }
+    } else if (runnerResults?.ran === true && !hasStructuredCoverage) {
+      testResult.approved = false;
+      testResult.coverage_percentage = 0;
+      if (!testResult.issues_found.includes('Cobertura estruturada ausente na execução do QA Runner')) {
+        testResult.issues_found.push('Cobertura estruturada ausente na execução do QA Runner');
+      }
+      if (!testResult.issues_found.includes('Os testes executaram, mas o runner não conseguiu materializar evidência estruturada de cobertura para o gateway.')) {
+        testResult.issues_found.push('Os testes executaram, mas o runner não conseguiu materializar evidência estruturada de cobertura para o gateway.');
+      }
+      testResult.recommendations.push('Corrigir a coleta e o parsing de cobertura do QA Runner antes de liberar o gateway de QA.');
+      if (coverageSource) {
+        testResult.recommendations.push(`Verificar por que a origem de cobertura ${coverageSource} não resultou em objeto estruturado utilizável pelo gateway.`);
+      }
     }
 
-    if (runnerResults?.testResults) {
+    if (hasStructuredTestResults) {
       testResult.test_execution = runnerResults.testResults;
     }
 
@@ -568,7 +627,7 @@ export async function devopsAgent(code, triggerType = 'feature') {
       (signal) => getOpenAIClient('Este agente').chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         temperature: 0.3,
-        max_tokens: 2000,
+        max_tokens: 4000,
         messages: [
           { role: 'system', content: skillContent + JSON_SUFFIX },
           { role: 'user', content: `Planeje o deploy para este código: ${code}` },

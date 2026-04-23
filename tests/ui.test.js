@@ -308,6 +308,30 @@ test.describe('dashboard.html — Estrutura', () => {
       status: 200, contentType: 'application/json',
       body: JSON.stringify({ executions: [] })
     }));
+    await page.route('**/api/dashboard/executions/*', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ id: 'pipeline-ui-001', status: 'failed', currentStage: 'qa' })
+    }));
+    await page.route('**/api/pipeline/*/guide**', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        pipelineId: 'pipeline-ui-001',
+        status: 'failed',
+        currentStage: 'qa',
+        recommendedAction: { operation: 'retry-stage', stage: 'qa' },
+        recommendations: [{ operation: 'retry-stage', stage: 'qa', reason: 'QA bloqueado', eligible: true }],
+        recentTimeline: [],
+        steps: [
+          { order: 1, stage: 'development', label: 'Desenvolvimento', status: 'completed', actions: [] },
+          { order: 2, stage: 'qa', label: 'QA', status: 'blocked', actions: [{ operation: 'retry-stage', stage: 'qa', label: 'Reexecutar QA' }] }
+        ],
+        checkpointCatalog: { count: 1, checkpoints: [{ checkpointId: 'cp-ui-001', stage: 'qa', status: 'blocked' }] }
+      })
+    }));
+    await page.route('**/api/pipeline/*/resume', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ pipelineId: 'pipeline-ui-001', status: 'resuming', operation: 'retry-stage' })
+    }));
 
     await page.goto(`${BASE_URL}/dashboard.html`);
   });
@@ -336,7 +360,7 @@ test.describe('dashboard.html — Estrutura', () => {
   });
 
   test('botão Atualizar está presente e clicável', async ({ page }) => {
-    const refreshBtn = page.locator('button.refresh-btn');
+    const refreshBtn = page.getByRole('button', { name: '🔄 Atualizar' });
     await expect(refreshBtn).toBeVisible();
     await refreshBtn.click();
     await expect(page.locator('#last-updated')).toContainText('Atualizado em');
@@ -357,13 +381,69 @@ test.describe('dashboard.html — Autenticação', () => {
 
 test.describe('dashboard.html — Filtros de execução', () => {
   test.beforeEach(async ({ page }) => {
-    await page.route('**/api/dashboard/**', route => route.fulfill({
+    await page.route('**/api/dashboard/stats', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ successfulExecutions: 10, failedExecutions: 2, successRate: 83, averageExecutionTime: 200 })
+    }));
+    await page.route('**/api/dashboard/distribution', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ simple: 5, external: 7, total: 12 })
+    }));
+    await page.route('**/api/dashboard/timeline', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ timeline: [] })
+    }));
+    await page.route('**/api/dashboard/errors', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([])
+    }));
+    await page.route('**/api/dashboard/time-saved', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ totalExecutions: 12, totalHoursSaved: 480, costSavedEstimate: '$24,000' })
+    }));
+    await page.route('**/api/dashboard/executions?limit=50', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ executions: [{ id: 'pipeline-ui-001', requirement: 'Retomar QA bloqueado', type: 'simple', status: 'failed', createdAt: new Date().toISOString(), duration: 12 }] })
+    }));
+    await page.route('**/api/dashboard/executions?limit=50&status=completed', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ executions: [] })
+    }));
+    await page.route('**/api/dashboard/executions?limit=50&status=failed', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ executions: [{ id: 'pipeline-ui-001', requirement: 'Retomar QA bloqueado', type: 'simple', status: 'failed', createdAt: new Date().toISOString(), duration: 12 }] })
+    }));
+    await page.route('**/api/dashboard/executions?limit=50&type=external', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ executions: [] })
+    }));
+    await page.route('**/api/dashboard/executions?limit=50&type=simple', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ executions: [{ id: 'pipeline-ui-001', requirement: 'Retomar QA bloqueado', type: 'simple', status: 'failed', createdAt: new Date().toISOString(), duration: 12 }] })
+    }));
+    await page.route('**/api/dashboard/executions/*', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ id: 'pipeline-ui-001', status: 'failed', currentStage: 'qa' })
+    }));
+    await page.route('**/api/pipeline/*/guide**', route => route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify({
-        successfulExecutions: 10, failedExecutions: 2, successRate: 83, averageExecutionTime: 200,
-        simple: 5, external: 7, total: 12, timeline: [], totalExecutions: 12,
-        totalHoursSaved: 480, costSavedEstimate: '$24,000', executions: []
+        pipelineId: 'pipeline-ui-001',
+        status: 'failed',
+        currentStage: 'qa',
+        recommendedAction: { operation: 'retry-stage', stage: 'qa' },
+        recommendations: [{ operation: 'retry-stage', stage: 'qa', reason: 'QA bloqueado', eligible: true }],
+        recentTimeline: [{ stage: 'qa', status: 'blocked', createdAt: new Date().toISOString() }],
+        steps: [
+          { order: 1, stage: 'development', label: 'Desenvolvimento', status: 'completed', actions: [] },
+          { order: 2, stage: 'qa', label: 'QA', status: 'blocked', actions: [{ operation: 'retry-stage', stage: 'qa', label: 'Reexecutar QA' }] }
+        ],
+        checkpointCatalog: { count: 1, checkpoints: [{ checkpointId: 'cp-ui-001', stage: 'qa', status: 'blocked' }] }
       })
+    }));
+    await page.route('**/api/pipeline/*/resume', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ pipelineId: 'pipeline-ui-001', status: 'resuming', operation: 'retry-stage' })
     }));
     await page.goto(`${BASE_URL}/dashboard.html`);
   });
@@ -388,5 +468,20 @@ test.describe('dashboard.html — Filtros de execução', () => {
       page.click('button:has-text("🔗 Externas")')
     ]);
     expect(request.url()).toContain('type=external');
+  });
+
+  test('dashboard exibe o guia operacional ao detalhar uma execução', async ({ page }) => {
+    await page.click('button:has-text("Detalhar")');
+    await expect(page.locator('#guide-summary')).toContainText('pipeline-ui-001');
+    await expect(page.locator('#guide-steps')).toContainText('QA');
+    await expect(page.locator('#guide-recommendations')).toContainText('retry-stage');
+  });
+
+  test('ação assistida do guia dispara retomada via HTTP', async ({ page }) => {
+    const [request] = await Promise.all([
+      page.waitForRequest(req => req.url().includes('/api/pipeline/pipeline-ui-001/resume') && req.method() === 'POST'),
+      page.click('button:has-text("Reexecutar QA")')
+    ]);
+    expect(request.postData()).toContain('retryStage');
   });
 });

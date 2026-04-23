@@ -8,7 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { RepositoryManager } from './repository-manager.js';
 import { PortManager } from './port-manager.js';
-import { executePipeline, loadExecutionsFromDisk, startPipeline, pipelineEmitters } from './orchestrator.js';
+import { executePipeline, loadExecutionsFromDisk, startPipeline, pipelineEmitters, getCheckpointCatalog, getExecutionCheckpoints, getExecutionGuide, getExecutionInspection, getExecutionTimeline, getPipelineExecution, getResumeInfo, getResumeRecommendations, resumePipeline } from './orchestrator.js';
 import { CodePersister } from './code-persister.js';
 import { CodeIntegrator } from './code-integrator.js';
 import { validateWriteback } from './writeback-validator.js';
@@ -134,22 +134,171 @@ app.get('/api/pipeline/:pipelineId/stream', (req, res) => {
   const cleanup = () => {
     clearInterval(heartbeat);
     emitter.off('progress', onProgress);
+    emitter.off('checkpoint', onCheckpoint);
+    emitter.off('timeline', onTimeline);
+    emitter.off('inspection', onInspection);
+    emitter.off('resuming', onResuming);
     emitter.off('done', onDone);
     emitter.off('blocked_by_qa', onBlocked);
     emitter.off('error', onError);
   };
 
   const onProgress    = (data) => send('progress', data);
+  const onCheckpoint  = (data) => send('checkpoint', data);
+  const onTimeline    = (data) => send('timeline', data);
+  const onInspection  = (data) => send('inspection', data);
+  const onResuming    = (data) => send('resuming', data);
   const onDone        = (data) => { cleanup(); send('done', data); res.end(); };
   const onBlocked     = (data) => { cleanup(); send('blocked_by_qa', data); res.end(); };
   const onError       = (data) => { cleanup(); send('error', data); res.end(); };
 
-  emitter.on('progress',     onProgress);
-  emitter.on('done',         onDone);
+  emitter.on('progress',      onProgress);
+  emitter.on('checkpoint',    onCheckpoint);
+  emitter.on('timeline',      onTimeline);
+  emitter.on('inspection',    onInspection);
+  emitter.on('resuming',      onResuming);
+  emitter.on('done',          onDone);
   emitter.on('blocked_by_qa', onBlocked);
-  emitter.on('error',        onError);
+  emitter.on('error',         onError);
 
   req.on('close', cleanup);
+});
+
+app.get('/api/pipeline/:pipelineId/resume-info', (req, res) => {
+  try {
+    const { pipelineId } = req.params;
+    const resumeInfo = getResumeInfo(pipelineId);
+
+    if (!resumeInfo) {
+      return res.status(404).json({ error: 'Pipeline not found' });
+    }
+
+    return res.json(resumeInfo);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/pipeline/:pipelineId/checkpoints', (req, res) => {
+  try {
+    const { pipelineId } = req.params;
+    const execution = getPipelineExecution(pipelineId);
+    if (!execution) {
+      return res.status(404).json({ error: 'Pipeline not found' });
+    }
+
+    const limit = Number(req.query.limit || 0);
+    const stage = req.query.stage || null;
+    const status = req.query.status || null;
+    const catalog = getCheckpointCatalog(pipelineId, { stage, status, limit });
+    return res.json({
+      pipelineId,
+      checkpointCount: catalog.count,
+      filters: {
+        stage: catalog.stage,
+        status: catalog.status,
+        limit: Number.isFinite(limit) && limit > 0 ? limit : null,
+      },
+      checkpoints: catalog.checkpoints,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/pipeline/:pipelineId/timeline', (req, res) => {
+  try {
+    const { pipelineId } = req.params;
+    const execution = getPipelineExecution(pipelineId);
+    if (!execution) {
+      return res.status(404).json({ error: 'Pipeline not found' });
+    }
+
+    const limit = Number(req.query.limit || 50);
+    const timeline = getExecutionTimeline(pipelineId, { limit });
+    return res.json({
+      pipelineId,
+      count: timeline.length,
+      timeline,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/pipeline/:pipelineId/inspection', (req, res) => {
+  try {
+    const { pipelineId } = req.params;
+    const limit = Number(req.query.limit || 50);
+    const stage = req.query.stage || null;
+    const status = req.query.status || null;
+    const inspection = getExecutionInspection(pipelineId, { limit, stage, status, checkpointLimit: limit });
+    if (!inspection) {
+      return res.status(404).json({ error: 'Pipeline not found' });
+    }
+
+    return res.json(inspection);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/pipeline/:pipelineId/recommendations', (req, res) => {
+  try {
+    const { pipelineId } = req.params;
+    const recommendations = getResumeRecommendations(pipelineId);
+    if (!recommendations) {
+      return res.status(404).json({ error: 'Pipeline not found' });
+    }
+
+    return res.json(recommendations);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/pipeline/:pipelineId/guide', (req, res) => {
+  try {
+    const { pipelineId } = req.params;
+    const limit = Number(req.query.limit || 10);
+    const stage = req.query.stage || null;
+    const status = req.query.status || null;
+    const guide = getExecutionGuide(pipelineId, { limit, stage, status, checkpointLimit: limit });
+    if (!guide) {
+      return res.status(404).json({ error: 'Pipeline not found' });
+    }
+
+    return res.json(guide);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/pipeline/:pipelineId/resume', async (req, res) => {
+  try {
+    const { pipelineId } = req.params;
+    const { stage = null, retryStage = null, force = false, notes = null } = req.body || {};
+    const execution = await resumePipeline(pipelineId, { stage, retryStage, force, notes });
+
+    return res.json({
+      pipelineId,
+      status: execution.status,
+      operation: retryStage ? 'retry-stage' : 'resume',
+      resumeEligible: execution.resume?.resumeEligible === true,
+      resumeFromStage: execution.resume?.resumeFromStage || retryStage || stage,
+      currentStage: execution.currentStage || null,
+      lastResumeRequest: execution.resume?.lastResumeRequest || null,
+      inspectionUrl: `/api/pipeline/${pipelineId}/inspection`,
+      timelineUrl: `/api/pipeline/${pipelineId}/timeline`,
+      recommendationsUrl: `/api/pipeline/${pipelineId}/recommendations`,
+      guideUrl: `/api/pipeline/${pipelineId}/guide`,
+    });
+  } catch (error) {
+    if (/não está elegível|não encontrada|não está disponível/i.test(error.message)) {
+      return res.status(409).json({ error: error.message });
+    }
+    return res.status(500).json({ error: error.message });
+  }
 });
 
 // Get pipeline execution
@@ -242,6 +391,11 @@ app.post('/api/pipeline/external', async (req, res) => {
           || stage.qa?.gatewayReason
           || stage.security?.gatewayReason
           || 'Pipeline bloqueado por gateway de qualidade',
+        resumeEligible: pipelineExecution.resume?.resumeEligible === true,
+        failedStage: pipelineExecution.resume?.failedStage || pipelineExecution.currentStage || null,
+        resumeFromStage: pipelineExecution.resume?.resumeFromStage || null,
+        checkpointsUrl: `/api/pipeline/${pipelineExecution.id}/checkpoints`,
+        resumeUrl: `/api/pipeline/${pipelineExecution.id}/resume`,
         code_review: stage.code_review ?? null,
         security: stage.security ?? null,
         qa: stage.qa ?? null,

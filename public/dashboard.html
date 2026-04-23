@@ -299,6 +299,142 @@
       font-size: 12px;
     }
 
+    .guide-layout {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+
+    .guide-card {
+      background: white;
+      padding: 25px;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+    }
+
+    .guide-card h3 {
+      color: #333;
+      font-size: 16px;
+      margin-bottom: 16px;
+      font-weight: 600;
+    }
+
+    .guide-empty {
+      color: #999;
+      font-size: 13px;
+      padding: 18px;
+      background: #f8f9fa;
+      border-radius: 8px;
+    }
+
+    .guide-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .guide-summary-item {
+      border: 1px solid #e9ecef;
+      border-radius: 10px;
+      padding: 14px;
+      background: #fafafa;
+    }
+
+    .guide-summary-item .label {
+      color: #666;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    .guide-summary-item .value {
+      color: #222;
+      font-size: 14px;
+      font-weight: 600;
+      word-break: break-word;
+    }
+
+    .guide-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .guide-step {
+      border: 1px solid #e9ecef;
+      border-radius: 10px;
+      padding: 14px;
+      background: #fff;
+    }
+
+    .guide-step.completed { border-left: 4px solid #10b981; }
+    .guide-step.failed, .guide-step.blocked { border-left: 4px solid #ef4444; }
+    .guide-step.running, .guide-step.resuming { border-left: 4px solid #3b82f6; }
+    .guide-step.pending { border-left: 4px solid #cbd5e1; }
+
+    .guide-step-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+
+    .guide-step-meta {
+      color: #666;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .guide-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .guide-action-btn {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      background: #667eea;
+      color: white;
+    }
+
+    .guide-action-btn.secondary {
+      background: #eef2ff;
+      color: #374151;
+      border: 1px solid #c7d2fe;
+    }
+
+    .guide-timeline-item {
+      padding: 10px 0;
+      border-bottom: 1px solid #eee;
+      font-size: 13px;
+      color: #333;
+    }
+
+    .guide-timeline-item:last-child {
+      border-bottom: none;
+    }
+
+    .execution-action-btn {
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid #c7d2fe;
+      background: #eef2ff;
+      color: #3730a3;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
     @media (max-width: 768px) {
       .stats-grid {
         grid-template-columns: 1fr;
@@ -314,6 +450,10 @@
 
       header h1 {
         font-size: 20px;
+      }
+
+      .guide-layout {
+        grid-template-columns: 1fr;
       }
 
       .executions-table {
@@ -440,12 +580,30 @@
         </div>
       </div>
     </div>
+
+    <div class="guide-layout">
+      <div class="guide-card">
+        <div class="header-controls">
+          <h3>🧭 Navegação Guiada da Execução</h3>
+          <button class="refresh-btn" type="button" onclick="refreshSelectedExecutionGuide()">Atualizar guia</button>
+        </div>
+        <div id="guide-summary" class="guide-empty">Selecione uma execução para visualizar o passo a passo, os checkpoints e as ações assistidas de retomada.</div>
+        <div id="guide-steps" class="guide-steps"></div>
+      </div>
+
+      <div class="guide-card">
+        <h3>📍 Timeline e Recomendações</h3>
+        <div id="guide-recommendations" class="guide-empty">As recomendações de retomada aparecerão aqui quando uma execução for selecionada.</div>
+        <div id="guide-timeline" style="margin-top: 18px;"></div>
+      </div>
+    </div>
   </div>
 
   <script>
     let distributionChart = null;
     let timelineChart = null;
     let currentFilter = 'all';
+    let currentGuideExecutionId = null;
     let API_KEY = localStorage.getItem('pipeline_api_key') || '';
 
     // Pre-fill input if key is stored
@@ -455,6 +613,151 @@
     });
 
     function apiHeaders() { return { 'x-api-key': API_KEY }; }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function setGuideEmptyState(message) {
+      document.getElementById('guide-summary').className = 'guide-empty';
+      document.getElementById('guide-summary').innerHTML = escapeHtml(message);
+      document.getElementById('guide-steps').innerHTML = '';
+      document.getElementById('guide-recommendations').className = 'guide-empty';
+      document.getElementById('guide-recommendations').innerHTML = 'As recomendações de retomada aparecerão aqui quando uma execução for selecionada.';
+      document.getElementById('guide-timeline').innerHTML = '';
+    }
+
+    function renderGuide(execution, guide) {
+      if (!execution || !guide) {
+        setGuideEmptyState('Não foi possível carregar o guia desta execução.');
+        return;
+      }
+
+      const recommended = guide.recommendedAction
+        ? `<div class="guide-summary-item"><div class="label">Ação recomendada</div><div class="value">${escapeHtml(guide.recommendedAction.operation)} em ${escapeHtml(guide.recommendedAction.stage)}</div></div>`
+        : `<div class="guide-summary-item"><div class="label">Ação recomendada</div><div class="value">Nenhuma ação sugerida</div></div>`;
+
+      document.getElementById('guide-summary').className = 'guide-summary';
+      document.getElementById('guide-summary').innerHTML = `
+        <div class="guide-summary-item">
+          <div class="label">Pipeline</div>
+          <div class="value">${escapeHtml(execution.id || guide.pipelineId)}</div>
+        </div>
+        <div class="guide-summary-item">
+          <div class="label">Status</div>
+          <div class="value">${escapeHtml(guide.status || execution.status || '-')}</div>
+        </div>
+        <div class="guide-summary-item">
+          <div class="label">Stage atual</div>
+          <div class="value">${escapeHtml(guide.currentStage || execution.currentStage || '-')}</div>
+        </div>
+        ${recommended}
+      `;
+
+      document.getElementById('guide-steps').innerHTML = (guide.steps || []).map(step => {
+        const actions = (step.actions || []).map(action => `
+          <button
+            type="button"
+            class="guide-action-btn ${action.operation === 'resume' ? 'secondary' : ''}"
+            onclick="runGuidedAction('${escapeHtml(guide.pipelineId)}', '${escapeHtml(action.operation)}', '${escapeHtml(action.stage)}')"
+          >${escapeHtml(action.label)}</button>
+        `).join('');
+
+        return `
+          <div class="guide-step ${escapeHtml(step.status || 'pending')}">
+            <div class="guide-step-header">
+              <div>
+                <strong>${escapeHtml(step.order)}. ${escapeHtml(step.label)}</strong>
+                <div class="guide-step-meta">
+                  Status: ${escapeHtml(step.status || 'pending')}<br>
+                  Último checkpoint: ${escapeHtml(step.lastCheckpoint?.checkpointId || 'nenhum')}<br>
+                  Última transição: ${escapeHtml(step.transition || step.lastCheckpoint?.transition || '-')} 
+                </div>
+              </div>
+              <span class="status-badge ${escapeHtml(step.status || 'pending')}">${escapeHtml(step.status || 'pending')}</span>
+            </div>
+            ${actions ? `<div class="guide-actions">${actions}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      const recommendationsHtml = (guide.recommendations || []).length > 0
+        ? (guide.recommendations || []).map(item => `
+            <div class="guide-timeline-item">
+              <strong>${escapeHtml(item.operation)}</strong> em <strong>${escapeHtml(item.stage)}</strong><br>
+              <span style="color:#666; font-size:12px;">${escapeHtml(item.reason || 'Sem razão adicional registrada.')}</span>
+            </div>
+          `).join('')
+        : '<div class="guide-empty">Nenhuma recomendação adicional disponível para esta execução.</div>';
+      document.getElementById('guide-recommendations').className = '';
+      document.getElementById('guide-recommendations').innerHTML = recommendationsHtml;
+
+      const timelineHtml = (guide.recentTimeline || []).length > 0
+        ? (guide.recentTimeline || []).map(item => `
+            <div class="guide-timeline-item">
+              <strong>${escapeHtml(item.stage || '-')}</strong> · ${escapeHtml(item.status || '-')}<br>
+              <span style="color:#666; font-size:12px;">${escapeHtml(item.createdAt || '-')}</span>
+            </div>
+          `).join('')
+        : '<div class="guide-empty">Nenhum evento recente encontrado para esta execução.</div>';
+      document.getElementById('guide-timeline').innerHTML = timelineHtml;
+    }
+
+    async function showExecutionGuide(pipelineId) {
+      if (!pipelineId) return;
+      currentGuideExecutionId = pipelineId;
+      try {
+        const [executionRes, guideRes] = await Promise.all([
+          fetch(`/api/dashboard/executions/${pipelineId}`, { headers: apiHeaders() }),
+          fetch(`/api/pipeline/${pipelineId}/guide?limit=10`, { headers: apiHeaders() })
+        ]);
+
+        if (!executionRes.ok) throw new Error(`Detalhes HTTP ${executionRes.status}`);
+        if (!guideRes.ok) throw new Error(`Guia HTTP ${guideRes.status}`);
+
+        const execution = await executionRes.json();
+        const guide = await guideRes.json();
+        renderGuide(execution, guide);
+      } catch (error) {
+        setGuideEmptyState(`Erro ao carregar o guia: ${error.message}`);
+      }
+    }
+
+    async function refreshSelectedExecutionGuide() {
+      if (!currentGuideExecutionId) {
+        setGuideEmptyState('Selecione uma execução para carregar o guia operacional.');
+        return;
+      }
+      await showExecutionGuide(currentGuideExecutionId);
+    }
+
+    async function runGuidedAction(pipelineId, operation, stage) {
+      try {
+        const body = operation === 'retry-stage'
+          ? { retryStage: stage, notes: 'Ação assistida iniciada pelo dashboard do MVP' }
+          : { stage, notes: 'Retomada assistida iniciada pelo dashboard do MVP' };
+
+        const res = await fetch(`/api/pipeline/${pipelineId}/resume`, {
+          method: 'POST',
+          headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+
+        showMessage(`Retomada solicitada com sucesso para ${pipelineId}.`, 'success');
+        await loadExecutions();
+        await showExecutionGuide(pipelineId);
+      } catch (error) {
+        showMessage(`Falha ao solicitar retomada: ${error.message}`, 'error');
+      }
+    }
 
     async function loadDashboard() {
       try {
@@ -530,6 +833,7 @@
                 <th>Status</th>
                 <th>Data</th>
                 <th>Duração</th>
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -549,6 +853,7 @@
               <td>${statusBadge}</td>
               <td>${date}</td>
               <td>${duration}</td>
+              <td><button type="button" class="execution-action-btn" onclick="showExecutionGuide('${exec.id}')">Detalhar</button></td>
             </tr>
           `;
         });
@@ -559,6 +864,15 @@
         `;
 
         document.getElementById('executions-container').innerHTML = html;
+
+        if (data.executions.length === 0) {
+          currentGuideExecutionId = null;
+          setGuideEmptyState('Nenhuma execução disponível para exibir no guia operacional.');
+        } else if (!currentGuideExecutionId) {
+          await showExecutionGuide(data.executions[0].id);
+        } else if (currentGuideExecutionId && data.executions.some(item => item.id === currentGuideExecutionId)) {
+          await showExecutionGuide(currentGuideExecutionId);
+        }
       } catch (error) {
         showMessage('Erro ao carregar execuções: ' + error.message, 'error');
       }
