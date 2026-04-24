@@ -1,78 +1,78 @@
-# Pipeline Executor
+# 🚀 Pipeline Executor
 
 Pipeline de desenvolvimento automatizado orientado por IA. A partir de um requisito em linguagem natural, o sistema aciona uma cadeia de agentes LLM especializados que percorre todas as etapas de um ciclo de desenvolvimento — especificação, análise, design UX, código, code review, segurança, QA e DevOps — e integra o resultado diretamente em um repositório GitHub via Pull Request.
 
 ---
 
-## Como funciona
+## ✨ Destaques (Features)
 
-O pipeline recebe um requisito, analisa o repositório alvo e executa agentes em sequência. Cada agente usa um `SKILL.md` como system prompt especializado e gera documentação estruturada da sua etapa. Ao final, o código gerado é integrado nos arquivos do repositório e um Pull Request é aberto automaticamente para revisão.
-
-```
-Requisito
-    │
-    ▼
-┌─────────────┐
-│  Stage 0    │  Spec Agent          Transforma o requisito em especificação estruturada
-└──────┬──────┘
-       ▼
-┌─────────────┐
-│  Stage 1    │  Analyst Agent       Gera user stories, requisitos técnicos e critérios de aceite
-└──────┬──────┘
-       ▼
-┌─────────────┐
-│  Stage 2    │  UX/UI Agent         Cria especificações de design, jornadas e componentes
-└──────┬──────┘
-       ▼
-┌─────────────┐
-│  Stage 3    │  Developer Agent     Gera código e testes compatíveis com a stack do repositório
-└──────┬──────┘
-       ▼
-┌─────────────┐
-│  Stage 4    │  Code Review Agent   Valida compilação, padrões de arquitetura, segurança e LGPD
-└──────┬──────┘  Auto-corrige issues menores; reenvia ao developer se reprovado (max 2x)
-       │
-       ├─── Reprovado após 2 tentativas → pipeline bloqueado (status: blocked_by_review)
-       │
-       ▼
-┌─────────────┐
-│  Stage 5    │  Security Agent      Checklist Privacy by Design + Security by Design + LGPD
-└──────┬──────┘  Avalia autenticação, autorização, exposição de APIs e dependências externas
-       │
-       ├─── Vulnerabilidade crítica ou alta → pipeline bloqueado (status: blocked_by_security)
-       │
-       ▼
-┌─────────────┐
-│  Stage 6    │  QA Agent            Executa testes reais no repositório alvo (jest/vitest/mocha)
-└──────┬──────┘  Coleta cobertura real, detecta regressão vs baseline, roda lint — gateway ≥ 80%
-       │
-       ├─── QA reprovado ou regressão de cobertura → pipeline bloqueado (status: blocked_by_qa)
-       │
-       ▼
-┌─────────────┐
-│  Stage 7    │  DevOps Agent        Planeja deploy, health checks e plano de rollback
-└──────┬──────┘
-       ▼
-┌─────────────┐
-│  Documenter │  Gera documentação Markdown para cada etapa automaticamente
-└──────┬──────┘
-       ▼
-  Pull Request aberto no repositório alvo
-```
+- **Fluxo Multiestágio (8 Estágios):** Processo completo desde a especificação até o planejamento de deploy.
+- **Resiliência e Retomada (Resume/Retry):** Capacidade única de retomar execuções de pontos de falha ou reexecutar estágios específicos sem perder o progresso anterior.
+- **Monitoramento em Tempo Real (SSE):** Acompanhamento live da execução via Server-Sent Events, integrado ao dashboard.
+- **QA Runner com Evidências Reais:** Execução real de testes (Jest/Vitest/Mocha) em workspaces isolados, coletando cobertura de código e linting.
+- **Gateways de Qualidade Determinísticos:** Além do julgamento da IA, o pipeline valida critérios técnicos como regressão de cobertura e padrões de arquitetura.
+- **Gestão de Workspaces:** Clone dinâmico de repositórios, alocação de portas e integração automática de código (Writeback Validation).
+- **Documentação Automática:** Geração de artefatos Markdown para cada etapa da execução.
 
 ---
 
-## Requisitos
+## 🛠️ Tecnologias (Tech Stack)
 
-- Node.js 20+
-- npm
+- **Runtime:** Node.js 20+ (ES Modules)
+- **Engine de IA:** OpenAI API (GPT-4o / GPT-4o-mini)
+- **Servidor:** Express.js com Helmet e Rate Limiting
+- **Automação Git:** Octokit (@octokit/rest) e comandos Git nativos
+- **Qualidade/QA:** Istanbul/C8 para cobertura, Playwright para testes de UI
+- **Logs:** Pino/Logger customizado com JSON estruturado
+
+---
+
+## 🏗️ Como funciona
+
+O pipeline recebe um requisito, analisa o repositório alvo e executa agentes em sequência. Cada agente usa um `SKILL.md` como system prompt especializado e gera documentação estruturada da sua etapa.
+
+```mermaid
+graph TD
+    A[Requisito] --> S0[Stage 0: Spec Agent]
+    S0 --> S1[Stage 1: Analyst Agent]
+    S1 --> S2[Stage 2: UX/UI Agent]
+    S2 --> S3[Stage 3: Developer Agent]
+    S3 --> S4[Stage 4: Code Review Agent]
+    S4 -- Falha --> S3
+    S4 -- OK --> S5[Stage 5: Security Agent]
+    S5 --> S6[Stage 6: QA Agent]
+    S6 -- Falha --> S3
+    S6 -- OK --> S7[Stage 7: DevOps Agent]
+    S7 --> D[Documentação & PR]
+```
+
+### Detalhamento dos Estágios
+
+- **Stage 0 (Spec Agent):** Transforma o requisito bruto em uma especificação técnica estruturada.
+- **Stage 1 (Analyst Agent):** Gera user stories, requisitos técnicos detalhados e critérios de aceite.
+- **Stage 2 (UX/UI Agent):** Cria especificações de design, jornadas do usuário e definições de componentes.
+- **Stage 3 (Developer Agent):** Gera o código-fonte e os testes automatizados correspondentes.
+- **Stage 4 (Code Review Agent):** Valida padrões, segurança e arquitetura. Pode solicitar correções ao Developer.
+- **Stage 5 (Security Agent):** Checklist rigoroso de Privacy by Design e Security by Design (OWASP).
+- **Stage 6 (QA Agent):** Executa testes reais e valida cobertura mínima (80%) e ausência de regressões.
+- **Stage 7 (DevOps Agent):** Planeja o deploy, health checks e estratégias de rollback.
+
+### Mecanismo de Resiliência (Resume/Retry)
+Diferente de pipelines lineares simples, o **Pipeline Executor** mantém checkpoints de cada transição. Se uma execução falha, você pode:
+1. **Inspecionar:** Ver exatamente onde falhou via `/api/pipeline/:id/inspection`.
+2. **Corrigir:** Ajustar o contexto ou o código.
+3. **Retomar:** Chamar `/resume` para continuar do último ponto estável ou `/retry-stage` para tentar novamente o estágio problemático.
+
+---
+
+## 🚀 Instalação e Uso
+
+### Requisitos
+- Node.js 20+ e npm
+- Git instalado no PATH
 - OpenAI API Key
-- GitHub Token (para pipelines externos com PR automático)
 
----
-
-## Instalação
-
+### Setup
 ```bash
 git clone https://github.com/ospm1970/pipeline-executor.git
 cd pipeline-executor
@@ -82,342 +82,122 @@ cp .env.example .env
 npm start
 ```
 
-O servidor sobe em `http://localhost:3001`.
+O servidor estará disponível em `http://localhost:3001`.
 
 ---
 
-## Configuração
+## ⚙️ Configuração (.env)
 
-Todas as variáveis estão documentadas em `.env.example`. As essenciais:
-
-```env
-# Obrigatório
-OPENAI_API_KEY=sk-proj-...
-API_KEY=sua-chave-para-autenticar-requisicoes
-
-# Para pipelines com repositório externo
-GITHUB_TOKEN=ghp_...
-
-# Opcionais
-PORT=3001
-OPENAI_MODEL=gpt-4.1-mini
-ALLOWED_ORIGINS=http://localhost:3001
-DEFAULT_BASE_BRANCH=main
-LOG_LEVEL=info
-```
+| Variável | Descrição | Padrão |
+|----------|-----------|---------|
+| `OPENAI_API_KEY` | Chave da OpenAI (Obrigatório) | - |
+| `API_KEY` | Chave para autenticar requisições no header `x-api-key` | - |
+| `GITHUB_TOKEN` | Token para operações em repositórios externos | - |
+| `PORT` | Porta do servidor Express | 3001 |
+| `OPENAI_MODEL` | Modelo usado pelos agentes | `gpt-4.1-mini` |
+| `LOG_LEVEL` | Nível de verbosidade (info, debug, warn, error) | `info` |
+| `ALLOWED_ORIGINS` | Origens permitidas para CORS | `http://localhost:3001` |
 
 ---
 
-## Autenticação
+## 📋 Scripts NPM
 
-Todas as rotas `/api/*` exigem o header `x-api-key`:
-
-```bash
-curl -H "x-api-key: sua-chave" http://localhost:3001/api/pipeline
-```
-
----
-
-## API
-
-### Pipeline simples
-
-Executa o pipeline sem repositório externo — útil para explorar o fluxo ou gerar documentação.
-
-```bash
-POST /api/pipeline/execute
-Content-Type: application/json
-x-api-key: sua-chave
-
-{
-  "requirement": "Criar endpoint de autenticação com JWT"
-}
-```
-
-Resposta:
-```json
-{
-  "pipelineId": "pipeline-1234567890",
-  "status": "completed",
-  "requirement": "Criar endpoint de autenticação com JWT",
-  "createdAt": "2026-04-13T12:00:00.000Z"
-}
-```
-
-Pipeline bloqueado pelo Code Review:
-```json
-{
-  "status": "blocked_by_review",
-  "reason": "src/eventos/eventos.controller.ts: endpoint DELETE sem @UseGuards — qualquer usuário autenticado pode deletar eventos de outros casais"
-}
-```
-
-Pipeline bloqueado pelo Security Agent:
-```json
-{
-  "status": "blocked_by_security",
-  "reason": "1 vulnerabilidade(s) crítica(s)/alta(s): [critical] authorization"
-}
-```
-
-Pipeline bloqueado pelo QA:
-```json
-{
-  "status": "blocked_by_qa",
-  "reason": "Cobertura insuficiente: 62% (mínimo 80%)",
-  "qa": { ... }
-}
-```
+- `npm start`: Inicia o servidor de produção.
+- `npm run dev`: Inicia o servidor em modo watch (desenvolvimento).
+- `npm test`: Executa os testes de integração nativos do Node.js.
+- `npm run test:ui`: Executa testes de interface com Playwright.
+- `npm run test:plan-validation`: Valida planos de execução.
+- `npm run monitor:pipeline`: Utilitário CLI para monitorar pipelines ativos.
+- `npm run pipeline:resume`: Utilitário para retomar pipelines via linha de comando.
 
 ---
 
-### Pipeline externo (repositório GitHub)
+## 🔌 API Principais
 
-Clona o repositório, executa o pipeline completo, integra o código gerado e abre um Pull Request.
-
-```bash
-POST /api/pipeline/external
-Content-Type: application/json
-x-api-key: sua-chave
-
+### Pipeline Externo (GitHub)
+`POST /api/pipeline/external`
+```json
 {
-  "repositoryUrl": "https://github.com/sua-org/seu-repo",
+  "repositoryUrl": "https://github.com/org/repo",
   "requirement": "Adicionar paginação no endpoint /api/products",
   "autoCommit": true
 }
 ```
 
-O `githubToken` é lido automaticamente da variável `GITHUB_TOKEN` do ambiente. Para sobrescrever por requisição, envie `"githubToken": "ghp_..."` no body.
-
-Resposta inclui:
+**Exemplo de Resposta (Sucesso):**
 ```json
 {
-  "executionId": "exec-1234567890-abc",
-  "pipelineId": "pipeline-...",
+  "executionId": "exec-1234567890",
+  "pipelineId": "pipeline-abc",
   "pullRequest": {
-    "url": "https://github.com/sua-org/seu-repo/pull/42",
+    "url": "https://github.com/org/repo/pull/42",
     "number": 42
   },
   "status": "completed"
 }
 ```
 
----
-
-### Outros endpoints
-
-```
-GET  /api/pipeline              Lista todos os pipelines executados
-GET  /api/pipeline/:pipelineId  Detalhes e documentação de um pipeline
-GET  /api/deployments           Lista workspaces ativos
-GET  /health                    Health check
-GET  /dashboard.html            Dashboard de monitoramento
+**Exemplo de Bloqueio (QA):**
+```json
+{
+  "status": "blocked_by_qa",
+  "reason": "Cobertura insuficiente: 62% (mínimo 80%)",
+  "resumeEligible": true,
+  "failedStage": "qa"
+}
 ```
 
----
-
-## Sistema de SKILLs
-
-Cada agente carrega seu `SKILL.md` como system prompt antes de executar. Os arquivos ficam em `skills/<nome-do-agente>/SKILL.md` e podem ser editados sem alterar código. O `skill-loader.js` compõe o prompt final concatenando o SKILL base com subdiretórios opcionais:
-
-```
-skills/<agente>/
-├── SKILL.md              Prompt base — obrigatório
-├── references/           Referências técnicas (ex: api_reference.md)
-├── context/              Contexto de domínio
-├── migration/            Guias de migração
-└── checklists/           Checklists por tipo de entrega
-```
-
-Agentes disponíveis:
-
-```
-skills/
-├── spec-agent/           Spec-Driven Development
-├── analyst-agent/        Análise de requisitos e user stories
-├── ui-ux-agent/          Design e experiência do usuário
-├── developer-agent/      Geração de código com testes (schema: files[], tests[])
-├── code-review-agent/    Revisão técnica: compilação, segurança, LGPD
-├── security-agent/       Privacy by Design, Security by Design, LGPD, OWASP
-├── qa-agent/             Qualidade, cobertura e gateway bloqueante
-├── devops-agent/         Deploy e infraestrutura
-└── documenter-agent/     Documentação técnica Markdown
-```
-
-Para adaptar o pipeline ao contexto da sua empresa, edite os SKILLs com suas convenções, stack e padrões.
+### Gestão de Execuções
+- `GET /api/pipeline`: Lista histórico de pipelines.
+- `GET /api/pipeline/:id/stream`: Stream SSE de progresso.
+- `GET /api/pipeline/:id/inspection`: Detalhes técnicos e checkpoints.
+- `POST /api/pipeline/:id/resume`: Comando de retomada.
 
 ---
 
-## Gateways de qualidade
+## 🎨 Dashboard
+O sistema inclui uma interface web integrada para monitoramento:
+- `http://localhost:3001/index.html`: Interface de disparo e histórico.
+- `http://localhost:3001/dashboard.html`: Visualização detalhada de métricas e status dos agentes.
 
-### Code Review Gateway (Stage 4)
+---
 
-O Code Review Agent valida o código antes do Security com até **2 tentativas de correção automática**:
+## 🛡️ Gateways de Qualidade
 
-1. Recebe `files[]` e `tests[]` do Developer Agent
-2. Verifica: compilação, padrões de arquitetura, guards de autenticação, DTOs com validação, ausência de segredos hardcoded, conformidade LGPD nos logs
-3. **Issues menores** (decorators faltando, imports inferíveis): corrige diretamente em `corrected_files`
-4. **Issues complexas** (falha de autorização, arquitetura incorreta): devolve `blocking_issues` ao Developer Agent para re-geração
-5. Após 2 tentativas sem aprovação: pipeline retorna `status: blocked_by_review`
+### Code Review (Stage 4)
+Loop de até 2 tentativas de correção automática para problemas de arquitetura, padrões NestJS/React e segurança básica.
 
-### Security Gateway (Stage 5)
+### Security (Stage 5)
+Validação de *Privacy by Design* e *Security by Design*, verificando vulnerabilidades OWASP e conformidade LGPD.
 
-O Security Agent executa dois checklists obrigatórios antes do QA:
-
-**Privacy by Design**
-- Minimização de dados, finalidade declarada, política de retenção
-- Consentimento explícito para dados sensíveis
-- Proteção técnica: criptografia em repouso, mascaramento de PII em logs, HTTPS
-
-**Security by Design**
-- Autenticação (JWT com expiração, refresh token rotation, proteção contra força bruta)
-- Autorização (RBAC, verificação de propriedade, escopo de acesso)
-- Validação de entrada, proteção contra OWASP Top 10 (SQL Injection, XSS, CSRF, Path Traversal)
-- Configuração segura (sem segredos hardcoded, CORS restrito, headers de segurança)
-- Dependências sem vulnerabilidades críticas ou altas
-
-Quando bloqueado: `status: blocked_by_security` com lista de vulnerabilidades por severidade e referência OWASP.
-
-### QA Gateway (Stage 6)
-
-O QA Agent é um gateway bloqueante orientado por **evidências reais de execução**. O pipeline não avança para DevOps se:
-
-- `approved: false` retornado pelo agente QA
-- Cobertura medida < 80% (para projetos novos)
-- Regressão de cobertura detectada vs baseline do repositório (tolerância: 0,5%)
-- Presença de issues classificadas como críticas ou altas
-
-**Funcionamento do QA Runner:**
-
-Quando o pipeline tem acesso ao repositório alvo, o `qa-runner.js` é executado antes do LLM:
-
-1. Detecta automaticamente o framework de testes (`jest`, `vitest`, `mocha`) via `package.json`
-2. Copia o repositório para um diretório temporário isolado (symlink de `node_modules` — sem reinstalação)
-3. Aplica os arquivos gerados pelo Developer Agent por cima da cópia
-4. Executa os testes com flag de cobertura → coleta `coverage/coverage-summary.json` (istanbul/c8)
-5. Calcula delta vs cobertura baseline do repositório original
-6. Executa ESLint se configurado no projeto
-7. Repassa todas as evidências ao agente LLM, que usa dados reais para análise e recomendações
-8. O campo `coverage_percentage` no resultado final reflete sempre a cobertura **medida**, nunca estimada
-
-Resultado estruturado do QA:
+### QA Runner (Stage 6)
+O gateway mais rigoroso. Executa testes reais no projeto alvo e coleta resultados estruturados:
 ```json
 {
   "approved": true,
   "coverage_percentage": 87.4,
-  "coverage_real": { "lines": 87.4, "functions": 91.0, "branches": 78.2, "statements": 86.8 },
-  "coverage_baseline": { "overall": 85.1 },
-  "coverage_delta": 2.3,
-  "coverage_regression": false,
-  "test_execution": { "total": 42, "passed": 42, "failed": 0, "pending": 0 },
-  "lint_results": { "errors": 0, "warnings": 3 },
-  "test_cases": [...],
-  "issues_found": [...],
-  "recommendations": [...]
+  "test_execution": { "total": 42, "passed": 42, "failed": 0 },
+  "coverage_delta": +2.3
 }
 ```
 
-Quando bloqueado: `status: blocked_by_qa` com motivo detalhado (cobertura, regressão, issues críticas).
-
 ---
 
-## Observabilidade
-
-Todos os logs são emitidos em JSON estruturado com `pipelineId` e `executionId` em cada linha, prontos para ingestão no CloudWatch ou qualquer sistema de log centralizado:
-
-```json
-{
-  "timestamp": "2026-04-13T12:00:00.000Z",
-  "level": "info",
-  "message": "Security check completed",
-  "service": "pipeline-executor",
-  "pipelineId": "pipeline-1234567890",
-  "executionId": "exec-abc",
-  "status": "approved_with_warnings"
-}
-```
-
-Níveis disponíveis: `error`, `warn`, `info`, `debug` — controlados por `LOG_LEVEL` no `.env`.
-
----
-
-## Persistência
-
-O histórico de execuções é salvo em `data/executions/<pipelineId>.json` e recarregado automaticamente ao reiniciar o servidor. Os workspaces dos repositórios clonados ficam em `workspaces/`.
-
-A documentação gerada por cada pipeline é salva em `docs/<pipelineId>/`:
+## 📂 Estrutura de Pastas
 
 ```
-docs/pipeline-1234567890/
-├── 00-especificacao.md
-├── 01-analise.md
-├── 02-design-ux.md
-├── 03-desenvolvimento.md
-├── 04-code-review.md
-├── 05-seguranca.md
-├── 06-qa-testes.md
-└── 07-devops.md
-```
-
-Todos os diretórios estão no `.gitignore`.
-
----
-
-## Testes
-
-```bash
-npm test
-```
-
-Executa testes de integração cobrindo autenticação, health check, validação de body e estrutura de resposta dos endpoints principais. Não requer `OPENAI_API_KEY` — o teste do pipeline aceita retorno 500 quando a chave não está configurada no ambiente de testes.
-
----
-
-## Estrutura do projeto
-
-```
-pipeline-executor/
-├── server.js                  Servidor Express, rotas e middleware
-├── orchestrator.js            Orquestrador do pipeline (8 estágios) e persistência
-├── agents.js                  Agentes base (Analyst, Developer, QA, DevOps)
-├── agents-spec.js             Spec Agent com carregamento de SKILL
-├── agents-ux.js               UX/UI Agent com carregamento de SKILL
-├── agents-code-review.js      Code Review Agent com loop de correção (max 2x)
-├── agents-security.js         Security Agent — Privacy/Security by Design + LGPD
-├── agents-documenter.js       Documenter Agent com carregamento de SKILL
-├── qa-runner.js               QA Runner — executa testes reais, coleta cobertura e lint
-├── skill-loader.js            Carrega e compõe system prompts a partir dos SKILLs
-├── repository-manager.js      Clone, commit, branch e push via Git
-├── repository-analyzer.js     Análise estática de repositórios (stack, moduleType, deps)
-├── code-integrator.js         Integração do código gerado (schema files[] ou legado)
-├── code-persister.js          Persistência dos outputs do pipeline
-├── github-pr.js               Criação de Pull Requests via GitHub API
-├── port-manager.js            Alocação dinâmica de portas por execução
-├── dashboard-monitor.js       Rotas do dashboard de monitoramento
-├── logger.js                  Logger JSON estruturado com correlation ID
-├── retry.js                   Retry com backoff exponencial e timeout configurável
-├── config/
-│   └── documentation.config.js  Mapeamento de stages 0–7 para arquivos de documentação
-├── skills/                    SKILLs (system prompts) dos agentes
-├── public/                    Frontend estático (index.html, dashboard.html)
-├── tests/
-│   └── integration.test.js    Testes de integração (node:test nativo)
-├── data/executions/           Histórico persistido de execuções (gitignore)
-├── workspaces/                Repositórios clonados por execução (gitignore)
-└── docs/                      Documentação gerada pelos pipelines (gitignore)
+├── skills/           # System Prompts (SKILL.md) de cada agente
+├── data/             # Persistência de execuções (checkpoints JSON)
+├── docs/             # Documentação gerada pelos agentes (Markdown)
+├── public/           # Frontend (Dashboard e UI)
+├── tests/            # Suíte de testes de integração e UI
+├── orchestrator.js   # Cérebro do sistema e gestão de estados
+├── agents.js         # Definições base dos agentes LLM
+└── qa-runner.js      # Executor de testes isolados
 ```
 
 ---
 
-## Rate limiting
-
-Para proteger a API e os custos com OpenAI:
-
-- Rotas gerais `/api/*`: 50 requisições por 15 minutos por IP
-- Rotas de execução (`/execute`, `/external`): 10 execuções por hora por IP
-
----
-
-## Licença
+## 📄 Licença
 
 MIT
